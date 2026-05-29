@@ -1,0 +1,52 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Selection AI Assistant",
+  "version": "0.1.0",
+  "identifier": "com.selection-ai-assistant.app",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build",
+    "devUrl": "http://localhost:5173",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Selection AI Assistant",
+        "width": 900,
+        "height": 700,
+        "resizable": true,
+        "visible": true
+      },
+      {
+        "label": "floating-button",
+        "title": "AI",
+        "width": 56,
+        "height": 44,
+        "decorations": false,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "visible": false,
+        "skipTaskbar": true
+      },
+      {
+        "label": "ai-panel",
+        "title": "AI Assistant",
+        "width": 520,
+        "height": 620,
+        "decorations": false,
+        "alwaysOnTop": true,
+        "visible": false,
+        "skipTaskbar": true
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all"
+  }
+}
