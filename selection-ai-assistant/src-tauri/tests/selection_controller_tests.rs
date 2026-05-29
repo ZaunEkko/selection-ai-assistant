@@ -32,7 +32,10 @@ fn arms_candidate_after_read_success() {
 fn shows_button_when_mouse_is_near_anchor() {
     let mut controller = SelectionController::new();
     controller.handle(SelectionEvent::ReadSuccess(candidate()));
-    controller.handle(SelectionEvent::MouseHoverSatisfied(Point { x: 200.0, y: 120.0 }));
+    controller.handle(SelectionEvent::MouseHoverSatisfied(Point {
+        x: 200.0,
+        y: 120.0,
+    }));
     assert_eq!(controller.state_kind(), SelectionStateKind::ButtonVisible);
 }
 

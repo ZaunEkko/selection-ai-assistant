@@ -51,7 +51,11 @@ pub fn save_provider_config_in_state(
         message: err.to_string(),
     })?;
 
-    if let Some(existing) = config.providers.iter_mut().find(|item| item.id == provider.id) {
+    if let Some(existing) = config
+        .providers
+        .iter_mut()
+        .find(|item| item.id == provider.id)
+    {
         *existing = provider.clone();
     } else {
         config.providers.push(provider.clone());

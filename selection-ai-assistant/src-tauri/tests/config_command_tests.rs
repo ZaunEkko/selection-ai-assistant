@@ -1,5 +1,7 @@
 use selection_ai_assistant_lib::app_state::AppState;
-use selection_ai_assistant_lib::commands::config::{get_config_from_state, save_provider_config_in_state};
+use selection_ai_assistant_lib::commands::config::{
+    get_config_from_state, save_provider_config_in_state,
+};
 use selection_ai_assistant_lib::config::{AiProviderConfig, AppConfig};
 
 fn provider(id: &str, base_url: &str, model: &str) -> AiProviderConfig {
@@ -17,8 +19,11 @@ fn provider(id: &str, base_url: &str, model: &str) -> AiProviderConfig {
 fn save_provider_config_adds_provider_and_sets_default() {
     let state = AppState::new(AppConfig::default());
 
-    let config = save_provider_config_in_state(&state, provider("openai", "https://api.openai.com/v1", "gpt-test"))
-        .expect("provider should save");
+    let config = save_provider_config_in_state(
+        &state,
+        provider("openai", "https://api.openai.com/v1", "gpt-test"),
+    )
+    .expect("provider should save");
 
     assert_eq!(config.providers.len(), 1);
     assert_eq!(config.providers[0].id, "openai");
@@ -28,11 +33,17 @@ fn save_provider_config_adds_provider_and_sets_default() {
 #[test]
 fn save_provider_config_updates_existing_provider() {
     let state = AppState::new(AppConfig::default());
-    save_provider_config_in_state(&state, provider("openai", "https://api.openai.com/v1", "gpt-test"))
-        .expect("provider should save");
+    save_provider_config_in_state(
+        &state,
+        provider("openai", "https://api.openai.com/v1", "gpt-test"),
+    )
+    .expect("provider should save");
 
-    let config = save_provider_config_in_state(&state, provider("openai", "https://example.com/v1", "gpt-next"))
-        .expect("provider should update");
+    let config = save_provider_config_in_state(
+        &state,
+        provider("openai", "https://example.com/v1", "gpt-next"),
+    )
+    .expect("provider should update");
 
     assert_eq!(config.providers.len(), 1);
     assert_eq!(config.providers[0].base_url, "https://example.com/v1");
@@ -43,8 +54,11 @@ fn save_provider_config_updates_existing_provider() {
 fn save_provider_config_rejects_missing_required_fields() {
     let state = AppState::new(AppConfig::default());
 
-    let err = save_provider_config_in_state(&state, provider("", "https://api.openai.com/v1", "gpt-test"))
-        .expect_err("missing id should fail");
+    let err = save_provider_config_in_state(
+        &state,
+        provider("", "https://api.openai.com/v1", "gpt-test"),
+    )
+    .expect_err("missing id should fail");
     assert_eq!(err.code, "provider_id_required");
 
     let err = save_provider_config_in_state(&state, provider("openai", "", "gpt-test"))
@@ -55,8 +69,11 @@ fn save_provider_config_rejects_missing_required_fields() {
 #[test]
 fn get_config_from_state_returns_current_config() {
     let state = AppState::new(AppConfig::default());
-    save_provider_config_in_state(&state, provider("openai", "https://api.openai.com/v1", "gpt-test"))
-        .expect("provider should save");
+    save_provider_config_in_state(
+        &state,
+        provider("openai", "https://api.openai.com/v1", "gpt-test"),
+    )
+    .expect("provider should save");
 
     let config = get_config_from_state(&state).expect("config should load");
 

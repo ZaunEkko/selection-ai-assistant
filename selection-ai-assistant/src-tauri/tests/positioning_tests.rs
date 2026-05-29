@@ -28,7 +28,10 @@ fn places_window_near_anchor_inside_screen() {
 #[test]
 fn clamps_window_at_right_edge() {
     let position = place_near_anchor(
-        Point { x: 1900.0, y: 900.0 },
+        Point {
+            x: 1900.0,
+            y: 900.0,
+        },
         WindowSize {
             width: 320.0,
             height: 240.0,

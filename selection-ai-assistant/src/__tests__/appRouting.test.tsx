@@ -5,8 +5,9 @@ import App from '../App';
 let currentLabel = 'main';
 type Listener<T = unknown> = (event: { payload: T }) => void;
 
-const { listeners, runAiActionMock } = vi.hoisted(() => ({
+const { listeners, openPanelFromFloatingButtonMock, runAiActionMock } = vi.hoisted(() => ({
   listeners: new Map<string, Listener[]>(),
+  openPanelFromFloatingButtonMock: vi.fn(),
   runAiActionMock: vi.fn(),
 }));
 
@@ -47,6 +48,8 @@ vi.mock('../api/tauri', () => ({
   ),
   saveProviderConfig: vi.fn(),
   runAiAction: runAiActionMock,
+  openPanelFromFloatingButton: openPanelFromFloatingButtonMock,
+  formatCommandError: (err: unknown) => (err instanceof Error ? err.message : String(err)),
 }));
 
 function emit<T>(eventName: string, payload: T) {
@@ -60,7 +63,9 @@ describe('App routing by Tauri window label', () => {
     currentLabel = 'main';
     listeners.clear();
     runAiActionMock.mockReset();
+    openPanelFromFloatingButtonMock.mockReset();
     runAiActionMock.mockResolvedValue({ requestId: 'request-1' });
+    openPanelFromFloatingButtonMock.mockResolvedValue(undefined);
   });
 
   it('renders floating button for the floating-button window', () => {
@@ -69,6 +74,15 @@ describe('App routing by Tauri window label', () => {
     render(<App />);
 
     expect(screen.getByRole('button', { name: /open ai assistant/i })).toBeInTheDocument();
+  });
+
+  it('opens the panel when the floating button is clicked', async () => {
+    currentLabel = 'floating-button';
+
+    render(<App />);
+    fireEvent.click(screen.getByRole('button', { name: /open ai assistant/i }));
+
+    await waitFor(() => expect(openPanelFromFloatingButtonMock).toHaveBeenCalledTimes(1));
   });
 
   it('renders AI panel for the ai-panel window', () => {

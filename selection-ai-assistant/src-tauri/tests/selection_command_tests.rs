@@ -9,7 +9,10 @@ fn creates_panel_context_for_valid_manual_text() {
     assert_eq!(context.selection.text, "hello world");
     assert_eq!(context.selection.source_app, "manual");
     assert_eq!(context.selection.window_title, "Manual hotkey");
-    assert_eq!(context.selection.read_method, SelectionReadMethod::HotkeyClipboard);
+    assert_eq!(
+        context.selection.read_method,
+        SelectionReadMethod::HotkeyClipboard
+    );
     assert_eq!(context.action, AiAction::TranslateExplain);
 }
 

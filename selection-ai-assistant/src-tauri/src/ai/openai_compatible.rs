@@ -1,4 +1,5 @@
 use futures_util::StreamExt;
+use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -60,6 +61,10 @@ pub enum AiClientError {
     MissingModel,
     #[error("provider API key is empty")]
     MissingApiKey,
+    #[error("invalid provider header name `{name}`: {message}")]
+    InvalidHeaderName { name: String, message: String },
+    #[error("invalid provider header value for `{name}`: {message}")]
+    InvalidHeaderValue { name: String, message: String },
     #[error("request failed: {0}")]
     Request(String),
 }
@@ -83,7 +88,10 @@ impl OpenAiCompatibleClient {
         Ok(format!("{trimmed}/chat/completions"))
     }
 
-    pub fn validate_provider(provider: &AiProviderConfig, api_key: &str) -> Result<(), AiClientError> {
+    pub fn validate_provider(
+        provider: &AiProviderConfig,
+        api_key: &str,
+    ) -> Result<(), AiClientError> {
         if provider.base_url.trim().is_empty() {
             return Err(AiClientError::MissingBaseUrl);
         }
@@ -94,6 +102,29 @@ impl OpenAiCompatibleClient {
             return Err(AiClientError::MissingApiKey);
         }
         Ok(())
+    }
+
+    pub fn validated_provider_headers(
+        provider: &AiProviderConfig,
+    ) -> Result<HeaderMap, AiClientError> {
+        let mut headers = HeaderMap::new();
+
+        for (name, value) in &provider.headers {
+            let header_name = HeaderName::from_bytes(name.as_bytes()).map_err(|err| {
+                AiClientError::InvalidHeaderName {
+                    name: name.clone(),
+                    message: err.to_string(),
+                }
+            })?;
+            let header_value =
+                HeaderValue::from_str(value).map_err(|err| AiClientError::InvalidHeaderValue {
+                    name: name.clone(),
+                    message: err.to_string(),
+                })?;
+            headers.insert(header_name, header_value);
+        }
+
+        Ok(headers)
     }
 
     pub fn http_client(&self) -> &reqwest::Client {
@@ -113,18 +144,23 @@ impl OpenAiCompatibleClient {
         Self::validate_provider(provider, api_key)?;
         let endpoint = Self::endpoint(&provider.base_url)?;
         let body = build_chat_request(provider.model.clone(), messages, true);
+        let headers = Self::validated_provider_headers(provider)?;
 
         let response = self
             .http
             .post(endpoint)
             .bearer_auth(api_key)
+            .headers(headers)
             .json(&body)
             .send()
             .await
             .map_err(|err| AiClientError::Request(err.to_string()))?;
 
         if !response.status().is_success() {
-            return Err(AiClientError::Request(format!("HTTP {}", response.status())));
+            return Err(AiClientError::Request(format!(
+                "HTTP {}",
+                response.status()
+            )));
         }
 
         let mut buffer = Vec::new();
@@ -177,9 +213,8 @@ pub fn extract_sse_deltas_from_bytes(
             line_bytes.pop();
         }
 
-        let line = std::str::from_utf8(&line_bytes).map_err(|err| {
-            AiClientError::Request(format!("invalid UTF-8 in SSE line: {err}"))
-        })?;
+        let line = std::str::from_utf8(&line_bytes)
+            .map_err(|err| AiClientError::Request(format!("invalid UTF-8 in SSE line: {err}")))?;
 
         let Some(data) = line.strip_prefix("data:") else {
             continue;

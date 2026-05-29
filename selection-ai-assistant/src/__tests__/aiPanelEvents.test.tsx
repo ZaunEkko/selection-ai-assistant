@@ -94,12 +94,57 @@ describe('AiPanel Tauri event lifecycle', () => {
     });
   });
 
+  it('does not let a stale invoke rejection reset a newer request', async () => {
+    const requestIds = ['request-1', 'request-2'];
+    vi.stubGlobal('crypto', { ...globalThis.crypto, randomUUID: () => requestIds.shift() ?? 'fallback-request' });
+
+    let rejectFirst!: (reason?: unknown) => void;
+    invokeMock
+      .mockReturnValueOnce(
+        new Promise((_, reject) => {
+          rejectFirst = reject;
+        }),
+      )
+      .mockReturnValueOnce(new Promise(() => undefined));
+
+    render(<AiPanel />);
+
+    await waitFor(() => expect(listenMock).toHaveBeenCalledWith('panel_context', expect.any(Function)));
+    await act(async () => {
+      emit('panel_context', {
+        selection: { text: 'hello world', sourceApp: 'manual', windowTitle: 'Manual hotkey' },
+        action: 'translateExplain',
+      });
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: '总结' }));
+    fireEvent.click(screen.getByRole('button', { name: '解释' }));
+
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledTimes(2));
+
+    await act(async () => {
+      rejectFirst({ code: 'first_failed', message: 'first request failed' });
+    });
+
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.getByText(/生成中/)).toBeInTheDocument();
+    expect(screen.getByText('动作：explain')).toBeInTheDocument();
+  });
+
+  it('hides the AI panel when the close button is clicked', async () => {
+    render(<AiPanel />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close panel' }));
+
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith('hide_ai_panel'));
+  });
+
   it('does not call run_ai_action without selected text', async () => {
     render(<AiPanel />);
 
     fireEvent.click(screen.getByRole('button', { name: '解释' }));
 
     await waitFor(() => expect(listenMock).toHaveBeenCalled());
-    expect(invokeMock).not.toHaveBeenCalled();
+    expect(invokeMock).not.toHaveBeenCalledWith('run_ai_action', expect.anything());
   });
 });
