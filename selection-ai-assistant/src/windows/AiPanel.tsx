@@ -1,6 +1,6 @@
 import { listen } from '@tauri-apps/api/event';
-import { useEffect, useReducer, useState } from 'react';
-import { formatCommandError, runAiAction, type UiAction } from '../api/tauri';
+import { useEffect, useReducer, useRef, useState } from 'react';
+import { formatCommandError, hideAiPanel, runAiAction, type UiAction } from '../api/tauri';
 import { ActionBar } from '../components/ActionBar';
 import { initialPanelState, panelReducer } from '../stores/panelStore';
 
@@ -18,6 +18,7 @@ export function AiPanel() {
   const [selectedText, setSelectedText] = useState('');
   const [question, setQuestion] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const activeRequestId = useRef<string | null>(null);
 
   useEffect(() => {
     const unlisteners: Array<() => void> = [];
@@ -27,6 +28,7 @@ export function AiPanel() {
       setSelectedText(event.payload.selection.text);
       setActiveAction(event.payload.action);
       setError(null);
+      activeRequestId.current = null;
       dispatchPanel({ type: 'reset' });
     }).then((fn) => {
       if (disposed) fn();
@@ -41,6 +43,9 @@ export function AiPanel() {
     });
 
     listen<StreamDone>('ai_stream_done', (event) => {
+      if (activeRequestId.current === event.payload.requestId) {
+        activeRequestId.current = null;
+      }
       dispatchPanel({ type: 'finish', requestId: event.payload.requestId });
     }).then((fn) => {
       if (disposed) fn();
@@ -59,14 +64,25 @@ export function AiPanel() {
     setActiveAction(action);
     setError(null);
     const requestId = crypto.randomUUID();
+    activeRequestId.current = requestId;
     dispatchPanel({ type: 'start', requestId });
 
     try {
       await runAiAction({ requestId, action, text: selectedText });
     } catch (err) {
+      if (activeRequestId.current !== requestId) return;
+      activeRequestId.current = null;
       const message = formatCommandError(err);
       setError(message);
       dispatchPanel({ type: 'reset' });
+    }
+  }
+
+  async function closePanel() {
+    try {
+      await hideAiPanel();
+    } catch (err) {
+      setError(formatCommandError(err));
     }
   }
 
@@ -74,7 +90,7 @@ export function AiPanel() {
     <section className="ai-panel">
       <header className="panel-header">
         <strong>动作：{activeAction}</strong>
-        <button type="button" aria-label="Close panel">
+        <button type="button" aria-label="Close panel" onClick={closePanel}>
           ×
         </button>
       </header>

@@ -34,8 +34,30 @@ export function saveProviderConfig(provider: AiProviderConfig): Promise<AppConfi
 
 export type UiAction = 'translateExplain' | 'explain' | 'summarize' | 'codeExplain' | 'errorExplain' | 'menuFallback';
 
+export type Point = {
+  x: number;
+  y: number;
+};
+
 export function runAiAction(request: { requestId: string; action: UiAction; text: string }): Promise<{ requestId: string }> {
   return invoke<{ requestId: string }>('run_ai_action', { request });
+}
+
+export function hideAiPanel(): Promise<void> {
+  return invoke<void>('hide_ai_panel');
+}
+
+export function showAiPanel(position: Point): Promise<void> {
+  return invoke<void>('show_ai_panel', { position });
+}
+
+export function hideFloatingButton(): Promise<void> {
+  return invoke<void>('hide_floating_button');
+}
+
+export async function openPanelFromFloatingButton(position: Point = { x: 200, y: 200 }): Promise<void> {
+  await showAiPanel(position);
+  await hideFloatingButton();
 }
 
 export function formatCommandError(err: unknown): string {

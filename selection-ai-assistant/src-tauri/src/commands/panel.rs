@@ -42,10 +42,12 @@ pub fn hide_floating_button(app: AppHandle) -> Result<(), PublicError> {
 
 #[tauri::command]
 pub fn show_ai_panel(app: AppHandle, position: Point) -> Result<(), PublicError> {
-    let window = app.get_webview_window("ai-panel").ok_or_else(|| PublicError {
-        code: "ai_panel_missing".to_string(),
-        message: "AI panel window is not configured.".to_string(),
-    })?;
+    let window = app
+        .get_webview_window("ai-panel")
+        .ok_or_else(|| PublicError {
+            code: "ai_panel_missing".to_string(),
+            message: "AI panel window is not configured.".to_string(),
+        })?;
 
     window
         .set_position(tauri::Position::Physical(tauri::PhysicalPosition {
