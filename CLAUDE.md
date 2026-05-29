@@ -11,6 +11,7 @@
 ## 关键边界
 
 - 永远不要远程推送，除非用户明确说“推送到远程仓库”。包括 `git push`、force push、推送分支、推送 tag 或任何等价远程写入动作。
+- 用户说“提交本地”时，默认走 Claude 代提交流程：优先使用 `/commit-commands:commit` 或等价 Claude 提交流程生成提交信息并附带 Claude attribution；不要裸用 `git commit -m`。
 - 分支工作流遵循 `main` / `dev` / `feature/*` / `release/*` / `hotfix/*`；`main` 和 `dev` 合并走 PR，不直接 push。
 - 选中文本只应在用户显式点击 AI 动作、悬浮按钮、热键或面板操作后发送给 AI provider。
 - `temp/` 是本地临时/敏感工作区，已被 `.gitignore` 忽略；不要提交其中的设计文档、过程记录或敏感材料。
