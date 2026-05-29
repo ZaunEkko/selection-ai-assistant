@@ -1,0 +1,27 @@
+# Dependencies
+node_modules/
+
+# Local planning/spec docs
+docs/
+
+# Frontend build output
+dist/
+
+# Rust build output
+target/
+
+# Tauri generated artifacts
+selection-ai-assistant/src-tauri/gen/
+selection-ai-assistant/src-tauri/.tauri/
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Environment files
+.env
+.env.*
+!.env.example
