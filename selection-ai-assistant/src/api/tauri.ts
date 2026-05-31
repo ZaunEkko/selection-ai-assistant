@@ -5,6 +5,7 @@ export type AiProviderConfig = {
   name: string;
   baseUrl: string;
   model: string;
+  apiKey: string;
   apiKeyRef: string;
   headers: Array<[string, string]>;
 };
@@ -32,6 +33,14 @@ export function saveProviderConfig(provider: AiProviderConfig): Promise<AppConfi
   return invoke<AppConfig>('save_provider_config', { provider });
 }
 
+export function listProviderModels(provider: AiProviderConfig): Promise<string[]> {
+  return invoke<string[]>('list_provider_models', { provider });
+}
+
+export function testProviderConnection(provider: AiProviderConfig): Promise<{ success: boolean; modelCount: number }> {
+  return invoke<{ success: boolean; modelCount: number }>('test_provider_connection', { provider });
+}
+
 export type UiAction = 'translateExplain' | 'explain' | 'summarize' | 'codeExplain' | 'errorExplain' | 'menuFallback';
 
 export type Point = {
@@ -55,9 +64,8 @@ export function hideFloatingButton(): Promise<void> {
   return invoke<void>('hide_floating_button');
 }
 
-export async function openPanelFromFloatingButton(position: Point = { x: 200, y: 200 }): Promise<void> {
-  await showAiPanel(position);
-  await hideFloatingButton();
+export async function openPanelFromFloatingButton(): Promise<void> {
+  await invoke('open_panel_for_current_selection');
 }
 
 export function formatCommandError(err: unknown): string {

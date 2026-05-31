@@ -88,6 +88,31 @@ impl OpenAiCompatibleClient {
         Ok(format!("{trimmed}/chat/completions"))
     }
 
+    pub fn models_endpoint(base_url: &str) -> Result<String, AiClientError> {
+        let trimmed = base_url.trim().trim_end_matches('/');
+        if trimmed.is_empty() {
+            return Err(AiClientError::MissingBaseUrl);
+        }
+        Ok(format!("{trimmed}/models"))
+    }
+
+    pub fn parse_model_ids(body: &str) -> Result<Vec<String>, AiClientError> {
+        let value: serde_json::Value = serde_json::from_str(body)
+            .map_err(|err| AiClientError::Request(format!("invalid model list JSON: {err}")))?;
+        let data = value
+            .get("data")
+            .and_then(|data| data.as_array())
+            .ok_or_else(|| {
+                AiClientError::Request("model list response missing data array".to_string())
+            })?;
+
+        Ok(data
+            .iter()
+            .filter_map(|item| item.get("id").and_then(|id| id.as_str()))
+            .map(ToString::to_string)
+            .collect())
+    }
+
     pub fn validate_provider(
         provider: &AiProviderConfig,
         api_key: &str,
@@ -129,6 +154,42 @@ impl OpenAiCompatibleClient {
 
     pub fn http_client(&self) -> &reqwest::Client {
         &self.http
+    }
+
+    pub async fn list_models(
+        &self,
+        provider: &AiProviderConfig,
+        api_key: &str,
+    ) -> Result<Vec<String>, AiClientError> {
+        if provider.base_url.trim().is_empty() {
+            return Err(AiClientError::MissingBaseUrl);
+        }
+        if api_key.trim().is_empty() {
+            return Err(AiClientError::MissingApiKey);
+        }
+        let endpoint = Self::models_endpoint(&provider.base_url)?;
+        let headers = Self::validated_provider_headers(provider)?;
+        let response = self
+            .http
+            .get(endpoint)
+            .bearer_auth(api_key)
+            .headers(headers)
+            .send()
+            .await
+            .map_err(|err| AiClientError::Request(err.to_string()))?;
+
+        if !response.status().is_success() {
+            return Err(AiClientError::Request(format!(
+                "HTTP {}",
+                response.status()
+            )));
+        }
+
+        let body = response
+            .text()
+            .await
+            .map_err(|err| AiClientError::Request(err.to_string()))?;
+        Self::parse_model_ids(&body)
     }
 
     pub async fn stream_chat<F>(

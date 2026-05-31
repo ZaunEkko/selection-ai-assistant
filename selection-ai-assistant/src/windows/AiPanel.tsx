@@ -7,6 +7,7 @@ import { initialPanelState, panelReducer } from '../stores/panelStore';
 type PanelContext = {
   selection: { text: string; sourceApp: string; windowTitle: string };
   action: UiAction;
+  autoRun?: boolean;
 };
 
 type StreamDelta = { requestId: string; delta: string };
@@ -25,11 +26,15 @@ export function AiPanel() {
     let disposed = false;
 
     listen<PanelContext>('panel_context', (event) => {
-      setSelectedText(event.payload.selection.text);
+      const text = event.payload.selection.text;
+      setSelectedText(text);
       setActiveAction(event.payload.action);
       setError(null);
       activeRequestId.current = null;
       dispatchPanel({ type: 'reset' });
+      if (event.payload.autoRun === true) {
+        void runActionForText(event.payload.action, text);
+      }
     }).then((fn) => {
       if (disposed) fn();
       else unlisteners.push(fn);
@@ -58,8 +63,8 @@ export function AiPanel() {
     };
   }, []);
 
-  async function runAction(action: UiAction) {
-    if (!selectedText.trim()) return;
+  async function runActionForText(action: UiAction, text: string) {
+    if (!text.trim()) return;
 
     setActiveAction(action);
     setError(null);
@@ -68,7 +73,7 @@ export function AiPanel() {
     dispatchPanel({ type: 'start', requestId });
 
     try {
-      await runAiAction({ requestId, action, text: selectedText });
+      await runAiAction({ requestId, action, text });
     } catch (err) {
       if (activeRequestId.current !== requestId) return;
       activeRequestId.current = null;
@@ -76,6 +81,10 @@ export function AiPanel() {
       setError(message);
       dispatchPanel({ type: 'reset' });
     }
+  }
+
+  async function runAction(action: UiAction) {
+    await runActionForText(action, selectedText);
   }
 
   async function closePanel() {

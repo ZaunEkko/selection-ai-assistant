@@ -29,6 +29,41 @@ pub fn should_use_clipboard_fallback(context: &ClipboardFallbackContext) -> bool
     !disabled
 }
 
+pub fn should_prepare_conservative_clipboard_capture(
+    format_count: u32,
+    unicode_text_available: bool,
+) -> bool {
+    format_count == 0 || (format_count == 1 && unicode_text_available)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ClipboardRestorePlan {
+    Text(String),
+    Empty,
+}
+
+pub fn clipboard_restore_attempt_sequence(
+    plan: ClipboardRestorePlan,
+    retry_count: usize,
+) -> Vec<ClipboardRestorePlan> {
+    let mut attempts = vec![plan; retry_count.saturating_add(1)];
+    attempts.push(ClipboardRestorePlan::Empty);
+    attempts
+}
+
+pub fn should_accept_selected_text_after_restore(
+    selected_text: Option<&str>,
+    restored_clipboard: bool,
+) -> Option<String> {
+    if !restored_clipboard {
+        return None;
+    }
+
+    selected_text
+        .map(str::to_string)
+        .filter(|text| text.chars().count() >= 2)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClipboardReadOutcome {
     pub text: Option<String>,

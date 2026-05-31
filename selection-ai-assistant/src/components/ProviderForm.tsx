@@ -1,21 +1,35 @@
-import { FormEvent, useState } from 'react';
-import { formatCommandError, type AiProviderConfig } from '../api/tauri';
+import { FormEvent, useEffect, useState } from 'react';
+import { formatCommandError, listProviderModels, testProviderConnection, type AiProviderConfig } from '../api/tauri';
 
 type Props = {
+  initialProvider?: AiProviderConfig;
   onSave: (provider: AiProviderConfig) => Promise<void>;
 };
 
-export function ProviderForm({ onSave }: Props) {
-  const [provider, setProvider] = useState<AiProviderConfig>({
-    id: 'openrouter',
-    name: 'OpenRouter',
-    baseUrl: 'https://openrouter.ai/api/v1',
-    model: '',
-    apiKeyRef: 'credential://openrouter',
-    headers: [],
-  });
+const defaultProvider: AiProviderConfig = {
+  id: 'openrouter',
+  name: 'OpenRouter',
+  baseUrl: 'https://openrouter.ai/api/v1',
+  model: '',
+  apiKey: '',
+  apiKeyRef: 'credential://openrouter',
+  headers: [],
+};
+
+export function ProviderForm({ initialProvider, onSave }: Props) {
+  const [provider, setProvider] = useState<AiProviderConfig>(initialProvider ?? defaultProvider);
   const [saving, setSaving] = useState(false);
+  const [loadingModels, setLoadingModels] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [models, setModels] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [status, setStatus] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (initialProvider) {
+      setProvider(initialProvider);
+    }
+  }, [initialProvider]);
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -28,6 +42,38 @@ export function ProviderForm({ onSave }: Props) {
       setError(formatCommandError(err));
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function loadModels() {
+    setLoadingModels(true);
+    setError(null);
+    setStatus(null);
+    try {
+      const loadedModels = await listProviderModels(provider);
+      setModels(loadedModels);
+      setStatus(`Loaded ${loadedModels.length} models.`);
+      if (!provider.model && loadedModels[0]) {
+        setProvider({ ...provider, model: loadedModels[0] });
+      }
+    } catch (err) {
+      setError(formatCommandError(err));
+    } finally {
+      setLoadingModels(false);
+    }
+  }
+
+  async function testConnection() {
+    setTesting(true);
+    setError(null);
+    setStatus(null);
+    try {
+      const result = await testProviderConnection(provider);
+      setStatus(`Connection successful. ${result.modelCount} models available.`);
+    } catch (err) {
+      setError(formatCommandError(err));
+    } finally {
+      setTesting(false);
     }
   }
 
@@ -47,8 +93,35 @@ export function ProviderForm({ onSave }: Props) {
       </label>
       <label>
         Model
-        <input value={provider.model} onChange={(event) => setProvider({ ...provider, model: event.target.value })} />
+        <input
+          list="provider-models"
+          value={provider.model}
+          onChange={(event) => setProvider({ ...provider, model: event.target.value })}
+        />
       </label>
+      <datalist id="provider-models">
+        {models.map((model) => (
+          <option key={model} value={model} />
+        ))}
+      </datalist>
+      <button type="button" onClick={loadModels} disabled={loadingModels}>
+        {loadingModels ? 'Loading models...' : 'Load Models'}
+      </button>
+      <button type="button" onClick={testConnection} disabled={testing}>
+        {testing ? 'Testing...' : 'Test Connection'}
+      </button>
+      <label>
+        API key
+        <input
+          type="password"
+          value={provider.apiKey}
+          onChange={(event) => setProvider({ ...provider, apiKey: event.target.value })}
+          aria-describedby="api-key-help"
+        />
+      </label>
+      <p id="api-key-help" className="field-help">
+        Stored in your local settings file as plaintext. Environment variable fallback remains supported.
+      </p>
       <label>
         API key secret reference (future storage)
         <input
@@ -58,11 +131,12 @@ export function ProviderForm({ onSave }: Props) {
         />
       </label>
       <p id="api-key-ref-help" className="field-help">
-        This stores only a secret reference for future secure storage. Runtime AI requests currently read SELECTION_AI_API_KEY from the environment.
+        Optional label kept for future secure storage integration.
       </p>
       <button type="submit" disabled={saving}>
         {saving ? 'Saving...' : 'Save provider'}
       </button>
+      {status && <p role="status">{status}</p>}
       {error && <p role="alert">{error}</p>}
     </form>
   );

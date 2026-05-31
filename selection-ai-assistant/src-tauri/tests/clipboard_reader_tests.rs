@@ -1,5 +1,7 @@
 use selection_ai_assistant_lib::selection::clipboard_reader::{
-    empty_clipboard_outcome, should_use_clipboard_fallback, ClipboardFallbackContext,
+    clipboard_restore_attempt_sequence, empty_clipboard_outcome,
+    should_accept_selected_text_after_restore, should_prepare_conservative_clipboard_capture,
+    should_use_clipboard_fallback, ClipboardFallbackContext, ClipboardRestorePlan,
 };
 
 #[test]
@@ -42,6 +44,57 @@ fn allows_clipboard_for_normal_window() {
     };
 
     assert!(should_use_clipboard_fallback(&context));
+}
+
+#[test]
+fn allows_conservative_capture_for_empty_or_plain_unicode_only_clipboard() {
+    assert!(should_prepare_conservative_clipboard_capture(0, false));
+    assert!(should_prepare_conservative_clipboard_capture(1, true));
+}
+
+#[test]
+fn blocks_conservative_capture_for_non_text_or_mixed_clipboard_formats() {
+    assert!(!should_prepare_conservative_clipboard_capture(1, false));
+    assert!(!should_prepare_conservative_clipboard_capture(2, true));
+    assert!(!should_prepare_conservative_clipboard_capture(3, false));
+}
+
+#[test]
+fn restore_attempt_sequence_retries_original_then_cleans_up_with_empty_clipboard() {
+    assert_eq!(
+        clipboard_restore_attempt_sequence(ClipboardRestorePlan::Text("original".to_string()), 2),
+        vec![
+            ClipboardRestorePlan::Text("original".to_string()),
+            ClipboardRestorePlan::Text("original".to_string()),
+            ClipboardRestorePlan::Text("original".to_string()),
+            ClipboardRestorePlan::Empty,
+        ]
+    );
+}
+
+#[test]
+fn restore_attempt_sequence_retries_empty_clipboard_cleanup() {
+    assert_eq!(
+        clipboard_restore_attempt_sequence(ClipboardRestorePlan::Empty, 2),
+        vec![
+            ClipboardRestorePlan::Empty,
+            ClipboardRestorePlan::Empty,
+            ClipboardRestorePlan::Empty,
+            ClipboardRestorePlan::Empty,
+        ]
+    );
+}
+
+#[test]
+fn selected_text_is_only_accepted_when_clipboard_restore_succeeded() {
+    assert_eq!(
+        should_accept_selected_text_after_restore(Some("selected text"), true),
+        Some("selected text".to_string())
+    );
+    assert_eq!(
+        should_accept_selected_text_after_restore(Some("selected text"), false),
+        None
+    );
 }
 
 #[test]

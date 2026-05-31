@@ -65,16 +65,16 @@ cargo run
 - Tauri API wrapper：`selection-ai-assistant/src/api/tauri.ts`，集中封装 config、AI action、窗口显示/隐藏和错误格式化。
 - AI 面板状态：`selection-ai-assistant/src/stores/panelStore.ts`，用 `requestId` 过滤 stale delta/done，避免旧请求覆盖新请求。
 - `AiPanel` 监听后端事件：`panel_context`、`ai_stream_delta`、`ai_stream_done`。
-- `Settings` 负责 provider 配置；当前 `apiKeyRef` 只是未来安全存储引用，运行时 AI 请求实际读取 `SELECTION_AI_API_KEY`。
+- `Settings` 负责 provider 配置；会将 provider 配置和 API key 保存到本机明文设置文件。运行时 AI 请求优先使用已保存的 `provider.apiKey`，未保存时回退读取 `SELECTION_AI_API_KEY`；系统凭据存储仍是未来工作。
 
 ### Tauri/Rust 后端
 
-- 入口：`selection-ai-assistant/src-tauri/src/lib.rs` 注册 `AppState::new(AppConfig::default())` 和 Tauri commands。
+- 入口：`selection-ai-assistant/src-tauri/src/lib.rs` 注册通过 `AppState::load_or_default()` 初始化的应用状态（可用时加载本机设置，失败或缺失时回退 `AppConfig::default()`）和 Tauri commands。
 - `commands/`：Tauri command 层。
-  - `config.rs` 读写内存中的 `AppConfig`。
+  - `config.rs` 读取内存中的 `AppConfig`；保存 provider 配置时更新内存，并在可用时持久化到本机设置文件。
   - `panel.rs` 显示/隐藏/定位 `floating-button` 和 `ai-panel`。
   - `selection.rs` 根据手动文本生成 `panel_context` 并 emit 给前端。
-  - `ai.rs` 构造 prompt、读取 provider 和 `SELECTION_AI_API_KEY`，启动 OpenAI-compatible stream 并 emit `ai_stream_delta` / `ai_stream_done`。
+  - `ai.rs` 构造 prompt、按已保存 `provider.apiKey` 优先且 `SELECTION_AI_API_KEY` fallback 读取密钥，启动 OpenAI-compatible stream 并 emit `ai_stream_delta` / `ai_stream_done`。
 - `config/`：`AiProviderConfig`、`AppConfig` 结构和默认值。
 - `ai/`：动作分类与 OpenAI-compatible Chat Completions streaming client。
 - `selection/`：选择状态机、选择候选、UI Automation 结果模型、剪贴板 fallback 策略。

@@ -94,6 +94,34 @@ describe('AiPanel Tauri event lifecycle', () => {
     });
   });
 
+  it('auto-runs the classified action only when the panel context requests it', async () => {
+    render(<AiPanel />);
+
+    await waitFor(() => expect(listenMock).toHaveBeenCalledWith('panel_context', expect.any(Function)));
+    await act(async () => {
+      emit('panel_context', {
+        selection: { text: 'manual text', sourceApp: 'manual', windowTitle: 'Manual hotkey' },
+        action: 'translateExplain',
+      });
+    });
+
+    expect(invokeMock).not.toHaveBeenCalledWith('run_ai_action', expect.anything());
+
+    await act(async () => {
+      emit('panel_context', {
+        selection: { text: 'auto text', sourceApp: 'unknown', windowTitle: 'Unknown window' },
+        action: 'summarize',
+        autoRun: true,
+      });
+    });
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith('run_ai_action', {
+        request: { requestId: 'frontend-request-1', action: 'summarize', text: 'auto text' },
+      });
+    });
+  });
+
   it('does not let a stale invoke rejection reset a newer request', async () => {
     const requestIds = ['request-1', 'request-2'];
     vi.stubGlobal('crypto', { ...globalThis.crypto, randomUUID: () => requestIds.shift() ?? 'fallback-request' });

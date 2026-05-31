@@ -29,6 +29,21 @@ fn creates_chat_completion_endpoint_from_base_url() {
 }
 
 #[test]
+fn creates_models_endpoint_from_base_url() {
+    let endpoint = OpenAiCompatibleClient::models_endpoint("https://api.openai.com/v1/").unwrap();
+    assert_eq!(endpoint, "https://api.openai.com/v1/models");
+}
+
+#[test]
+fn parses_model_ids_from_models_response() {
+    let ids = OpenAiCompatibleClient::parse_model_ids(
+        r#"{"data":[{"id":"gpt-4.1"},{"id":"gpt-4.1-mini"}]}"#,
+    )
+    .expect("models should parse");
+
+    assert_eq!(ids, vec!["gpt-4.1".to_string(), "gpt-4.1-mini".to_string()]);
+}
+#[test]
 fn extracts_stream_delta_content() {
     let data = r#"{"choices":[{"delta":{"content":"hello"}}]}"#;
     assert_eq!(extract_delta_content(data), Some("hello".to_string()));
@@ -50,6 +65,7 @@ fn validates_provider_headers() {
         name: "Test".to_string(),
         base_url: "https://example.com/v1".to_string(),
         model: "gpt-test".to_string(),
+        api_key: "test-api-key".to_string(),
         api_key_ref: "credential://test".to_string(),
         headers: vec![("X-App".to_string(), "selection-ai".to_string())],
     };
@@ -69,6 +85,7 @@ fn rejects_invalid_provider_header_names() {
         name: "Test".to_string(),
         base_url: "https://example.com/v1".to_string(),
         model: "gpt-test".to_string(),
+        api_key: "test-api-key".to_string(),
         api_key_ref: "credential://test".to_string(),
         headers: vec![("bad header".to_string(), "value".to_string())],
     };

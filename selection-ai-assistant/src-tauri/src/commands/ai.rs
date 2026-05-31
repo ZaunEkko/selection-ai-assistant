@@ -1,9 +1,27 @@
 use tauri::{AppHandle, Emitter, State};
 
 use crate::ai::action_classifier::AiAction;
-use crate::ai::openai_compatible::{ChatMessage, OpenAiCompatibleClient};
+use crate::ai::openai_compatible::{AiClientError, ChatMessage, OpenAiCompatibleClient};
 use crate::app_state::AppState;
 use crate::types::PublicError;
+
+fn public_ai_error(code: &str, err: AiClientError) -> PublicError {
+    PublicError {
+        code: code.to_string(),
+        message: err.to_string(),
+    }
+}
+
+fn provider_api_key(provider: &crate::config::AiProviderConfig) -> Result<String, PublicError> {
+    let saved = provider.api_key.trim();
+    if !saved.is_empty() {
+        return Ok(saved.to_string());
+    }
+    std::env::var("SELECTION_AI_API_KEY").map_err(|_| PublicError {
+        code: "api_key_missing".to_string(),
+        message: "Enter an API key in Settings or set SELECTION_AI_API_KEY.".to_string(),
+    })
+}
 
 pub fn build_prompt_messages(action: AiAction, text: &str) -> Vec<ChatMessage> {
     let system = ChatMessage::system(
@@ -92,10 +110,7 @@ pub async fn run_ai_action(
             message: "Default provider was not found.".to_string(),
         })?;
 
-    let api_key = std::env::var("SELECTION_AI_API_KEY").map_err(|_| PublicError {
-        code: "api_key_missing".to_string(),
-        message: "Set SELECTION_AI_API_KEY before running an AI action.".to_string(),
-    })?;
+    let api_key = provider_api_key(&provider)?;
 
     let request_id = request.request_id.trim().to_string();
     let messages = build_prompt_messages(request.action, request.text.trim());
@@ -139,4 +154,33 @@ pub async fn run_ai_action(
     });
 
     Ok(response)
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TestProviderConnectionResponse {
+    pub success: bool,
+    pub model_count: usize,
+}
+
+#[tauri::command]
+pub async fn list_provider_models(
+    provider: crate::config::AiProviderConfig,
+) -> Result<Vec<String>, PublicError> {
+    let api_key = provider_api_key(&provider)?;
+    OpenAiCompatibleClient::new()
+        .list_models(&provider, &api_key)
+        .await
+        .map_err(|err| public_ai_error("provider_model_list_failed", err))
+}
+
+#[tauri::command]
+pub async fn test_provider_connection(
+    provider: crate::config::AiProviderConfig,
+) -> Result<TestProviderConnectionResponse, PublicError> {
+    let models = list_provider_models(provider).await?;
+    Ok(TestProviderConnectionResponse {
+        success: true,
+        model_count: models.len(),
+    })
 }
