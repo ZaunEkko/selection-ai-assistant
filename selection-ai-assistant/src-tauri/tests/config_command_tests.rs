@@ -10,6 +10,7 @@ fn provider(id: &str, base_url: &str, model: &str) -> AiProviderConfig {
         name: "Test Provider".to_string(),
         base_url: base_url.to_string(),
         model: model.to_string(),
+        api_key: "test-api-key".to_string(),
         api_key_ref: format!("credential://{id}"),
         headers: Vec::new(),
     }
@@ -51,6 +52,24 @@ fn save_provider_config_updates_existing_provider() {
 }
 
 #[test]
+fn save_provider_config_updates_default_provider_to_saved_provider() {
+    let state = AppState::new(AppConfig::default());
+    save_provider_config_in_state(
+        &state,
+        provider("openai", "https://api.openai.com/v1", "gpt-test"),
+    )
+    .expect("first provider should save");
+
+    let config = save_provider_config_in_state(
+        &state,
+        provider("openrouter", "https://openrouter.ai/api/v1", "gpt-next"),
+    )
+    .expect("second provider should save");
+
+    assert_eq!(config.default_provider_id.as_deref(), Some("openrouter"));
+}
+
+#[test]
 fn save_provider_config_rejects_missing_required_fields() {
     let state = AppState::new(AppConfig::default());
 
@@ -76,6 +95,95 @@ fn get_config_from_state_returns_current_config() {
     .expect("provider should save");
 
     let config = get_config_from_state(&state).expect("config should load");
+
+    assert_eq!(config.providers.len(), 1);
+    assert_eq!(config.providers[0].id, "openai");
+}
+
+#[test]
+fn save_provider_config_allows_empty_model_for_model_loading_flow() {
+    let state = AppState::new(AppConfig::default());
+
+    let config =
+        save_provider_config_in_state(&state, provider("openai", "https://api.openai.com/v1", ""))
+            .expect("provider without model should save");
+
+    assert_eq!(config.providers[0].model, "");
+}
+
+#[test]
+fn save_provider_config_persists_provider_to_settings_file() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let path = dir.path().join("settings.json");
+    let state = AppState::new_with_settings_path(AppConfig::default(), path.clone());
+
+    save_provider_config_in_state(
+        &state,
+        provider("openai", "https://api.openai.com/v1", "gpt-test"),
+    )
+    .expect("provider should save");
+
+    let loaded = AppConfig::load_from_path(&path).expect("settings should load from disk");
+    assert_eq!(loaded.default_provider_id.as_deref(), Some("openai"));
+    assert_eq!(loaded.providers[0].api_key, "test-api-key");
+}
+
+#[test]
+fn save_provider_config_does_not_mutate_memory_when_settings_write_fails() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let blocking_file = dir.path().join("not-a-dir");
+    std::fs::write(&blocking_file, "blocks settings directory").expect("blocking file");
+    let path = blocking_file.join("settings.json");
+    let state = AppState::new_with_settings_path(AppConfig::default(), path);
+
+    let err = save_provider_config_in_state(
+        &state,
+        provider("openai", "https://api.openai.com/v1", "gpt-test"),
+    )
+    .expect_err("settings write should fail");
+
+    assert_eq!(err.code, "config_save_failed");
+    let config = get_config_from_state(&state).expect("config should still be readable");
+    assert!(config.providers.is_empty());
+    assert_eq!(config.default_provider_id, None);
+}
+
+#[test]
+fn app_state_preserves_settings_path_after_corrupt_settings_then_saves_same_path() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let path = dir.path().join("nested").join("settings.json");
+    std::fs::create_dir_all(path.parent().expect("settings parent")).expect("settings parent");
+    std::fs::write(&path, "{not valid json").expect("corrupt settings");
+
+    let state = AppState::load_or_default_from_path(path.clone())
+        .expect("state should fall back to default config");
+    let config = get_config_from_state(&state).expect("fallback config should be readable");
+    assert!(config.providers.is_empty());
+
+    save_provider_config_in_state(
+        &state,
+        provider("openai", "https://api.openai.com/v1", "gpt-test"),
+    )
+    .expect("provider should save to preserved settings path");
+
+    let loaded = AppConfig::load_from_path(&path).expect("settings should load from original path");
+    assert_eq!(loaded.default_provider_id.as_deref(), Some("openai"));
+    assert_eq!(loaded.providers[0].id, "openai");
+}
+
+#[test]
+fn app_state_loads_existing_settings_from_path() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let path = dir.path().join("nested").join("settings.json");
+    let saved = AppConfig {
+        default_provider_id: Some("openai".to_string()),
+        providers: vec![provider("openai", "https://api.openai.com/v1", "gpt-test")],
+        ..AppConfig::default()
+    };
+    saved.save_to_path(&path).expect("settings should save");
+
+    let state = AppState::load_or_default_from_path(path).expect("state should load");
+    let config = get_config_from_state(&state).expect("config should be readable");
 
     assert_eq!(config.providers.len(), 1);
     assert_eq!(config.providers[0].id, "openai");

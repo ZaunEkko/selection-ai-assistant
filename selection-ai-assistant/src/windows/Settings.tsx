@@ -5,6 +5,8 @@ import { ProviderForm } from '../components/ProviderForm';
 export function Settings() {
   const [config, setConfig] = useState<AppConfig | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const selectedProvider =
+    config?.providers.find((provider) => provider.id === config.defaultProviderId) ?? config?.providers[0];
 
   useEffect(() => {
     getConfig()
@@ -24,7 +26,7 @@ export function Settings() {
 
       <section className="settings-section">
         <h2>Provider configuration</h2>
-        <ProviderForm onSave={handleSave} />
+        <ProviderForm initialProvider={selectedProvider} onSave={handleSave} />
       </section>
 
       <section className="settings-section">
