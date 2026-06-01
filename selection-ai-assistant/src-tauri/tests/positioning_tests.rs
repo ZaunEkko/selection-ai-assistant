@@ -46,3 +46,44 @@ fn clamps_window_at_right_edge() {
 
     assert_eq!(position.x, 1600.0);
 }
+
+#[test]
+fn flips_panel_above_anchor_when_bottom_space_is_insufficient() {
+    let position = place_near_anchor(
+        Point {
+            x: 500.0,
+            y: 1040.0,
+        },
+        WindowSize {
+            width: 420.0,
+            height: 360.0,
+        },
+        ScreenBounds {
+            x: 0.0,
+            y: 0.0,
+            width: 1920.0,
+            height: 1080.0,
+        },
+    );
+
+    assert_eq!(position.y, 668.0);
+}
+
+#[test]
+fn clamps_window_at_left_edge_and_handles_oversized_window() {
+    let position = place_near_anchor(
+        Point { x: -50.0, y: -20.0 },
+        WindowSize {
+            width: 2200.0,
+            height: 1200.0,
+        },
+        ScreenBounds {
+            x: 100.0,
+            y: 50.0,
+            width: 800.0,
+            height: 600.0,
+        },
+    );
+
+    assert_eq!(position, Point { x: 100.0, y: 50.0 });
+}

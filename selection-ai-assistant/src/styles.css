@@ -17,7 +17,8 @@ body {
 }
 
 button,
-input {
+input,
+select {
   font: inherit;
 }
 
@@ -71,6 +72,17 @@ button {
   gap: 12px;
 }
 
+.provider-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.model-field {
+  display: grid;
+  gap: 6px;
+}
+
 .provider-form label {
   display: grid;
   gap: 4px;
@@ -79,6 +91,7 @@ button {
 }
 
 .provider-form input,
+.provider-form select,
 .panel-footer input {
   border: 1px solid #cbd5e1;
   border-radius: 10px;
@@ -126,6 +139,15 @@ button {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+}
+
+.panel-header {
+  cursor: move;
+  user-select: none;
+}
+
+.panel-header button {
+  cursor: pointer;
 }
 
 .action-bar {

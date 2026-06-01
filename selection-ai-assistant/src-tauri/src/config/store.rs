@@ -55,7 +55,7 @@ impl Default for AppConfig {
             default_provider_id: None,
             providers: Vec::new(),
             hover_radius: 90.0,
-            hover_delay_ms: 220,
+            hover_delay_ms: 1_000,
             candidate_timeout_ms: 4_000,
             min_drag_distance: 6.0,
             hotkey: "Ctrl+Alt+A".to_string(),

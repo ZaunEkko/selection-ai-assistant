@@ -1,3 +1,4 @@
+use selection_ai_assistant_lib::config::AppConfig;
 use selection_ai_assistant_lib::input_monitor::events::{
     apply_mouse_up_action_to_pending_selection, classify_mouse_up, consume_pending_selection,
     handle_hotkey_state, handle_mouse_button_event, hover_action_for_pending_selection,
@@ -51,6 +52,7 @@ fn applying_drag_mouse_up_stores_pending_anchor_and_requests_old_button_hide() {
         pending_selection,
         Some(PendingSelection {
             anchor: Point { x: 5.0, y: 0.0 },
+            hover_started_at_ms: None,
         })
     );
     assert_eq!(
@@ -63,6 +65,7 @@ fn applying_drag_mouse_up_stores_pending_anchor_and_requests_old_button_hide() {
 fn applying_drag_mouse_up_replaces_old_pending_anchor_while_requesting_old_button_hide() {
     let mut pending_selection = Some(PendingSelection {
         anchor: Point { x: 100.0, y: 100.0 },
+        hover_started_at_ms: None,
     });
 
     let effect = apply_mouse_up_action_to_pending_selection(
@@ -76,6 +79,7 @@ fn applying_drag_mouse_up_replaces_old_pending_anchor_while_requesting_old_butto
         pending_selection,
         Some(PendingSelection {
             anchor: Point { x: 5.0, y: 0.0 },
+            hover_started_at_ms: None,
         })
     );
     assert_eq!(
@@ -173,6 +177,7 @@ fn mouse_down_cancels_old_pending_selection_before_new_drag() {
     let mut down = None;
     let mut pending_selection = Some(PendingSelection {
         anchor: Point { x: 100.0, y: 100.0 },
+        hover_started_at_ms: None,
     });
 
     assert_eq!(
@@ -192,38 +197,56 @@ fn mouse_down_cancels_old_pending_selection_before_new_drag() {
 
 #[test]
 fn mouse_move_during_active_drag_never_hover_triggers_pending_selection() {
-    let pending = PendingSelection {
+    let mut pending_selection = Some(PendingSelection {
         anchor: Point { x: 100.0, y: 100.0 },
-    };
+        hover_started_at_ms: Some(900),
+    });
     let drag_start = Some(Point { x: 20.0, y: 20.0 });
 
     assert_eq!(
         hover_action_for_pending_selection_when_idle(
-            Some(&pending),
+            &mut pending_selection,
             drag_start.as_ref(),
             Point { x: 105.0, y: 105.0 },
             90.0,
+            2_000,
+            1_000,
         ),
         PendingSelectionHoverAction::KeepPending
+    );
+    assert_eq!(
+        pending_selection,
+        Some(PendingSelection {
+            anchor: Point { x: 100.0, y: 100.0 },
+            hover_started_at_ms: None,
+        })
     );
 }
 
 #[test]
-fn mouse_move_after_drag_release_can_hover_trigger_pending_selection() {
-    let pending = PendingSelection {
+fn mouse_move_after_drag_release_first_entering_hover_radius_does_not_show_button() {
+    let mut pending_selection = Some(PendingSelection {
         anchor: Point { x: 100.0, y: 100.0 },
-    };
+        hover_started_at_ms: None,
+    });
 
     assert_eq!(
         hover_action_for_pending_selection_when_idle(
-            Some(&pending),
+            &mut pending_selection,
             None,
             Point { x: 105.0, y: 105.0 },
             90.0,
+            2_000,
+            1_000,
         ),
-        PendingSelectionHoverAction::CaptureAndShowButton {
+        PendingSelectionHoverAction::KeepPending
+    );
+    assert_eq!(
+        pending_selection,
+        Some(PendingSelection {
             anchor: Point { x: 100.0, y: 100.0 },
-        }
+            hover_started_at_ms: Some(2_000),
+        })
     );
 }
 
@@ -231,12 +254,14 @@ fn mouse_move_after_drag_release_can_hover_trigger_pending_selection() {
 fn hotkey_pending_selection_can_be_consumed_before_opening_panel() {
     let mut pending_selection = Some(PendingSelection {
         anchor: Point { x: 100.0, y: 100.0 },
+        hover_started_at_ms: None,
     });
 
     assert_eq!(
         pending_selection,
         Some(PendingSelection {
             anchor: Point { x: 100.0, y: 100.0 },
+            hover_started_at_ms: None,
         })
     );
     consume_pending_selection(&mut pending_selection);
@@ -401,16 +426,64 @@ fn repeated_hotkey_release_does_not_capture_twice() {
 
 #[test]
 fn pending_selection_waits_until_explicit_mouse_move_near_anchor() {
-    let pending = PendingSelection {
+    let mut pending_selection = Some(PendingSelection {
         anchor: Point { x: 100.0, y: 100.0 },
-    };
+        hover_started_at_ms: None,
+    });
 
     assert_eq!(
-        hover_action_for_pending_selection(Some(&pending), Point { x: 250.0, y: 100.0 }, 90.0),
+        hover_action_for_pending_selection(
+            &mut pending_selection,
+            Point { x: 250.0, y: 100.0 },
+            90.0,
+            1_000,
+            1_000,
+        ),
         PendingSelectionHoverAction::KeepPending
     );
     assert_eq!(
-        hover_action_for_pending_selection(Some(&pending), Point { x: 130.0, y: 130.0 }, 90.0),
+        pending_selection,
+        Some(PendingSelection {
+            anchor: Point { x: 100.0, y: 100.0 },
+            hover_started_at_ms: None,
+        })
+    );
+}
+
+#[test]
+fn pending_selection_inside_hover_radius_before_delay_keeps_pending() {
+    let mut pending_selection = Some(PendingSelection {
+        anchor: Point { x: 100.0, y: 100.0 },
+        hover_started_at_ms: Some(1_000),
+    });
+
+    assert_eq!(
+        hover_action_for_pending_selection(
+            &mut pending_selection,
+            Point { x: 130.0, y: 130.0 },
+            90.0,
+            1_999,
+            1_000,
+        ),
+        PendingSelectionHoverAction::KeepPending
+    );
+}
+
+#[test]
+fn pending_selection_inside_hover_radius_after_delay_shows_button() {
+    let mut pending_selection = Some(PendingSelection {
+        anchor: Point { x: 100.0, y: 100.0 },
+        hover_started_at_ms: Some(1_000),
+    });
+
+    assert_eq!(
+        hover_action_for_pending_selection(
+            &mut pending_selection,
+            Point { x: 130.0, y: 130.0 },
+            90.0,
+            2_000,
+            1_000,
+        ),
         PendingSelectionHoverAction::CaptureAndShowButton {
             anchor: Point { x: 100.0, y: 100.0 },
         }
@@ -418,9 +491,59 @@ fn pending_selection_waits_until_explicit_mouse_move_near_anchor() {
 }
 
 #[test]
-fn no_pending_selection_means_mouse_move_does_not_show_button() {
+fn pending_selection_leaving_hover_radius_resets_dwell() {
+    let mut pending_selection = Some(PendingSelection {
+        anchor: Point { x: 100.0, y: 100.0 },
+        hover_started_at_ms: Some(1_000),
+    });
+
     assert_eq!(
-        hover_action_for_pending_selection(None, Point { x: 100.0, y: 100.0 }, 90.0),
+        hover_action_for_pending_selection(
+            &mut pending_selection,
+            Point { x: 250.0, y: 100.0 },
+            90.0,
+            2_000,
+            1_000,
+        ),
+        PendingSelectionHoverAction::KeepPending
+    );
+    assert_eq!(
+        pending_selection,
+        Some(PendingSelection {
+            anchor: Point { x: 100.0, y: 100.0 },
+            hover_started_at_ms: None,
+        })
+    );
+
+    assert_eq!(
+        hover_action_for_pending_selection(
+            &mut pending_selection,
+            Point { x: 130.0, y: 130.0 },
+            90.0,
+            2_001,
+            1_000,
+        ),
+        PendingSelectionHoverAction::KeepPending
+    );
+}
+
+#[test]
+fn no_pending_selection_means_mouse_move_does_not_show_button() {
+    let mut pending_selection = None;
+
+    assert_eq!(
+        hover_action_for_pending_selection(
+            &mut pending_selection,
+            Point { x: 100.0, y: 100.0 },
+            90.0,
+            1_000,
+            1_000,
+        ),
         PendingSelectionHoverAction::NoPendingSelection
     );
+}
+
+#[test]
+fn default_hover_delay_is_one_second() {
+    assert_eq!(AppConfig::default().hover_delay_ms, 1_000);
 }

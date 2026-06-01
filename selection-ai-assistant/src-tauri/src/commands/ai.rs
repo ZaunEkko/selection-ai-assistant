@@ -1,9 +1,12 @@
 use tauri::{AppHandle, Emitter, State};
+use tokio::time::{timeout, Duration};
 
 use crate::ai::action_classifier::AiAction;
 use crate::ai::openai_compatible::{AiClientError, ChatMessage, OpenAiCompatibleClient};
 use crate::app_state::AppState;
 use crate::types::PublicError;
+
+const AI_STREAM_TIMEOUT: Duration = Duration::from_secs(60);
 
 fn public_ai_error(code: &str, err: AiClientError) -> PublicError {
     PublicError {
@@ -19,7 +22,7 @@ fn provider_api_key(provider: &crate::config::AiProviderConfig) -> Result<String
     }
     std::env::var("SELECTION_AI_API_KEY").map_err(|_| PublicError {
         code: "api_key_missing".to_string(),
-        message: "Enter an API key in Settings or set SELECTION_AI_API_KEY.".to_string(),
+        message: "请在设置中填写 API 密钥，或配置 SELECTION_AI_API_KEY 环境变量。".to_string(),
     })
 }
 
@@ -66,6 +69,59 @@ pub struct RunAiActionResponse {
     pub request_id: String,
 }
 
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiStreamErrorPayload {
+    pub request_id: String,
+    pub code: String,
+    pub message: String,
+}
+
+pub async fn stream_chat_events_for_request<OnDelta, OnError, OnDone>(
+    provider: crate::config::AiProviderConfig,
+    api_key: String,
+    request_id: String,
+    messages: Vec<ChatMessage>,
+    mut on_delta: OnDelta,
+    mut on_error: OnError,
+    mut on_done: OnDone,
+) where
+    OnDelta: FnMut(String, String) + Send,
+    OnError: FnMut(AiStreamErrorPayload) + Send,
+    OnDone: FnMut(String) + Send,
+{
+    let client = OpenAiCompatibleClient::new();
+    let request_id_for_stream = request_id.clone();
+
+    let stream_result = timeout(
+        AI_STREAM_TIMEOUT,
+        client.stream_chat(&provider, &api_key, messages, move |delta| {
+            on_delta(request_id_for_stream.clone(), delta);
+        }),
+    )
+    .await;
+
+    match stream_result {
+        Ok(Ok(())) => {}
+        Ok(Err(err)) => {
+            on_error(AiStreamErrorPayload {
+                request_id: request_id.clone(),
+                code: "provider_stream_failed".to_string(),
+                message: err.to_string(),
+            });
+        }
+        Err(_) => {
+            on_error(AiStreamErrorPayload {
+                request_id: request_id.clone(),
+                code: "provider_stream_timeout".to_string(),
+                message: "AI 服务商响应超时。".to_string(),
+            });
+        }
+    }
+
+    on_done(request_id);
+}
+
 #[tauri::command]
 pub async fn run_ai_action(
     app: AppHandle,
@@ -75,14 +131,14 @@ pub async fn run_ai_action(
     if request.text.trim().is_empty() {
         return Err(PublicError {
             code: "selection_text_required".to_string(),
-            message: "Selected text is required before running an AI action.".to_string(),
+            message: "运行 AI 动作前需要选中文本。".to_string(),
         });
     }
 
     if request.request_id.trim().is_empty() {
         return Err(PublicError {
             code: "request_id_required".to_string(),
-            message: "Request id is required before running an AI action.".to_string(),
+            message: "运行 AI 动作前需要 request id。".to_string(),
         });
     }
 
@@ -97,7 +153,7 @@ pub async fn run_ai_action(
 
     let provider_id = config.default_provider_id.ok_or_else(|| PublicError {
         code: "provider_missing".to_string(),
-        message: "Configure an AI provider before running an action.".to_string(),
+        message: "运行 AI 动作前需要先配置默认服务商。".to_string(),
     })?;
 
     let provider = config
@@ -107,7 +163,7 @@ pub async fn run_ai_action(
         .cloned()
         .ok_or_else(|| PublicError {
             code: "provider_missing".to_string(),
-            message: "Default provider was not found.".to_string(),
+            message: "未找到默认服务商配置。".to_string(),
         })?;
 
     let api_key = provider_api_key(&provider)?;
@@ -119,38 +175,33 @@ pub async fn run_ai_action(
     };
 
     tauri::async_runtime::spawn(async move {
-        let client = OpenAiCompatibleClient::new();
-        let request_id_for_stream = request_id.clone();
-        let app_for_stream = app.clone();
-
-        let stream_result = client
-            .stream_chat(&provider, &api_key, messages, move |delta| {
-                let _ = app_for_stream.emit(
+        stream_chat_events_for_request(
+            provider,
+            api_key,
+            request_id,
+            messages,
+            |request_id, delta| {
+                let _ = app.emit(
                     "ai_stream_delta",
                     serde_json::json!({
-                        "requestId": request_id_for_stream.clone(),
+                        "requestId": request_id,
                         "delta": delta,
                     }),
                 );
-            })
-            .await;
-
-        if let Err(err) = stream_result {
-            let _ = app.emit(
-                "ai_stream_delta",
-                serde_json::json!({
-                    "requestId": request_id.clone(),
-                    "delta": format!("AI request failed: {err}"),
-                }),
-            );
-        }
-
-        let _ = app.emit(
-            "ai_stream_done",
-            serde_json::json!({
-                "requestId": request_id,
-            }),
-        );
+            },
+            |payload| {
+                let _ = app.emit("ai_stream_error", payload);
+            },
+            |request_id| {
+                let _ = app.emit(
+                    "ai_stream_done",
+                    serde_json::json!({
+                        "requestId": request_id,
+                    }),
+                );
+            },
+        )
+        .await;
     });
 
     Ok(response)

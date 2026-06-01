@@ -1,4 +1,5 @@
 pub mod ai;
+pub mod app_lifecycle;
 pub mod app_state;
 pub mod commands;
 pub mod config;
@@ -22,15 +23,18 @@ pub fn run() {
             commands::panel::show_ai_panel,
             commands::panel::hide_ai_panel,
             commands::selection::open_panel_for_text,
+            commands::selection::get_latest_panel_context,
             commands::selection::open_panel_for_current_selection,
             commands::ai::run_ai_action,
             commands::ai::list_provider_models,
             commands::ai::test_provider_connection,
         ])
         .setup(|app| {
+            app_lifecycle::setup_background_lifecycle(app)?;
             input_monitor::start_background_monitor(app.handle().clone());
             Ok(())
         })
+        .on_window_event(app_lifecycle::handle_window_event)
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

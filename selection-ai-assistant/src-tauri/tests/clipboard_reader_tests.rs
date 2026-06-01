@@ -1,7 +1,8 @@
 use selection_ai_assistant_lib::selection::clipboard_reader::{
     clipboard_restore_attempt_sequence, empty_clipboard_outcome,
     should_accept_selected_text_after_restore, should_prepare_conservative_clipboard_capture,
-    should_use_clipboard_fallback, ClipboardFallbackContext, ClipboardRestorePlan,
+    should_use_clipboard_fallback, ClipboardFallbackContext, ClipboardFormatSnapshot,
+    ClipboardRestorePlan,
 };
 
 #[test]
@@ -47,15 +48,16 @@ fn allows_clipboard_for_normal_window() {
 }
 
 #[test]
-fn allows_conservative_capture_for_empty_or_plain_unicode_only_clipboard() {
+fn allows_conservative_capture_for_empty_plain_or_mixed_text_clipboard() {
     assert!(should_prepare_conservative_clipboard_capture(0, false));
     assert!(should_prepare_conservative_clipboard_capture(1, true));
+    assert!(should_prepare_conservative_clipboard_capture(2, true));
+    assert!(should_prepare_conservative_clipboard_capture(6, true));
 }
 
 #[test]
-fn blocks_conservative_capture_for_non_text_or_mixed_clipboard_formats() {
+fn blocks_conservative_capture_for_non_text_clipboard_formats() {
     assert!(!should_prepare_conservative_clipboard_capture(1, false));
-    assert!(!should_prepare_conservative_clipboard_capture(2, true));
     assert!(!should_prepare_conservative_clipboard_capture(3, false));
 }
 
@@ -67,6 +69,24 @@ fn restore_attempt_sequence_retries_original_then_cleans_up_with_empty_clipboard
             ClipboardRestorePlan::Text("original".to_string()),
             ClipboardRestorePlan::Text("original".to_string()),
             ClipboardRestorePlan::Text("original".to_string()),
+            ClipboardRestorePlan::Empty,
+        ]
+    );
+}
+
+#[test]
+fn restore_attempt_sequence_retries_format_snapshots_then_cleans_up_with_empty_clipboard() {
+    let snapshot = ClipboardRestorePlan::Formats(vec![ClipboardFormatSnapshot {
+        format: 13,
+        data: vec![b'o', 0, b'k', 0, 0, 0],
+    }]);
+
+    assert_eq!(
+        clipboard_restore_attempt_sequence(snapshot.clone(), 2),
+        vec![
+            snapshot.clone(),
+            snapshot.clone(),
+            snapshot,
             ClipboardRestorePlan::Empty,
         ]
     );
