@@ -48,6 +48,7 @@ vi.mock('../api/tauri', () => ({
   ),
   saveProviderConfig: vi.fn(),
   runAiAction: runAiActionMock,
+  getLatestPanelContext: vi.fn(() => Promise.resolve(null)),
   openPanelFromFloatingButton: openPanelFromFloatingButtonMock,
   formatCommandError: (err: unknown) => (err instanceof Error ? err.message : String(err)),
 }));
@@ -73,14 +74,14 @@ describe('App routing by Tauri window label', () => {
 
     render(<App />);
 
-    expect(screen.getByRole('button', { name: /open ai assistant/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '打开 AI 助手' })).toBeInTheDocument();
   });
 
   it('opens the panel when the floating button is clicked', async () => {
     currentLabel = 'floating-button';
 
     render(<App />);
-    fireEvent.click(screen.getByRole('button', { name: /open ai assistant/i }));
+    fireEvent.click(screen.getByRole('button', { name: '打开 AI 助手' }));
 
     await waitFor(() => expect(openPanelFromFloatingButtonMock).toHaveBeenCalledTimes(1));
   });
@@ -90,7 +91,7 @@ describe('App routing by Tauri window label', () => {
 
     render(<App />);
 
-    expect(screen.getByText(/点击动作开始生成/)).toBeInTheDocument();
+    expect(screen.getByText(/点击“执行当前动作”开始生成。/)).toBeInTheDocument();
   });
 
   it('shows running feedback after receiving selected text and clicking an AI panel action', async () => {
@@ -107,6 +108,9 @@ describe('App routing by Tauri window label', () => {
     });
 
     fireEvent.click(screen.getByRole('button', { name: '总结' }));
+    expect(runAiActionMock).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: '执行当前动作' }));
 
     await waitFor(() =>
       expect(runAiActionMock).toHaveBeenCalledWith(
@@ -114,12 +118,12 @@ describe('App routing by Tauri window label', () => {
       ),
     );
     expect(screen.getByText(/生成中/)).toBeInTheDocument();
-    expect(screen.getByText('动作：summarize')).toBeInTheDocument();
+    expect(screen.getByText('动作：总结')).toBeInTheDocument();
   });
 
   it('renders settings for other windows', async () => {
     render(<App />);
 
-    expect(await screen.findByRole('heading', { name: /settings/i })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: '设置' })).toBeInTheDocument();
   });
 });

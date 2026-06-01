@@ -8,7 +8,7 @@ mod windows_monitor {
         ptr::null_mut,
         sync::{mpsc, Mutex, OnceLock},
         thread,
-        time::Duration,
+        time::{Duration, Instant},
     };
 
     use tauri::Manager;
@@ -17,11 +17,11 @@ mod windows_monitor {
         Security::{GetTokenInformation, TokenElevation, TOKEN_ELEVATION, TOKEN_QUERY},
         System::{
             DataExchange::{
-                CloseClipboard, CountClipboardFormats, EmptyClipboard, GetClipboardData,
-                GetClipboardSequenceNumber, IsClipboardFormatAvailable, OpenClipboard,
-                SetClipboardData,
+                CloseClipboard, CountClipboardFormats, EmptyClipboard, EnumClipboardFormats,
+                GetClipboardData, GetClipboardSequenceNumber, IsClipboardFormatAvailable,
+                OpenClipboard, SetClipboardData,
             },
-            Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE},
+            Memory::{GlobalAlloc, GlobalLock, GlobalSize, GlobalUnlock, GMEM_MOVEABLE},
             Ole::CF_UNICODETEXT,
             Threading::{
                 OpenProcess, OpenProcessToken, QueryFullProcessImageNameW,
@@ -46,7 +46,9 @@ mod windows_monitor {
         app_state::AppState,
         commands::{
             panel::{hide_floating_button, show_floating_button},
-            selection::{create_panel_context_for_selection, open_panel_for_context},
+            selection::{
+                create_panel_context_for_selection, emit_panel_context, open_panel_for_context,
+            },
         },
         config::AppConfig,
         input_monitor::events::{
@@ -60,7 +62,7 @@ mod windows_monitor {
             clipboard_reader::{
                 clipboard_restore_attempt_sequence, should_accept_selected_text_after_restore,
                 should_prepare_conservative_clipboard_capture, should_use_clipboard_fallback,
-                ClipboardFallbackContext, ClipboardRestorePlan,
+                ClipboardFallbackContext, ClipboardFormatSnapshot, ClipboardRestorePlan,
             },
             types::SelectionCandidate,
         },
@@ -81,10 +83,17 @@ mod windows_monitor {
             let mut drag_start: Option<Point> = None;
             let mut pending_selection: Option<PendingSelection> = None;
             let mut pending_hotkey = PendingHotkeyAction::default();
+            let monitor_started_at = Instant::now();
 
             loop {
                 while let Ok(event) = mouse_rx.try_recv() {
-                    handle_mouse_event(&app, &mut drag_start, &mut pending_selection, event);
+                    handle_mouse_event(
+                        &app,
+                        &mut drag_start,
+                        &mut pending_selection,
+                        event,
+                        elapsed_ms(monitor_started_at),
+                    );
                 }
 
                 let cursor = cursor_point().unwrap_or(Point { x: 0.0, y: 0.0 });
@@ -105,9 +114,13 @@ mod windows_monitor {
                 }
 
                 match mouse_rx.recv_timeout(Duration::from_millis(50)) {
-                    Ok(event) => {
-                        handle_mouse_event(&app, &mut drag_start, &mut pending_selection, event)
-                    }
+                    Ok(event) => handle_mouse_event(
+                        &app,
+                        &mut drag_start,
+                        &mut pending_selection,
+                        event,
+                        elapsed_ms(monitor_started_at),
+                    ),
                     Err(mpsc::RecvTimeoutError::Timeout) => {}
                     Err(mpsc::RecvTimeoutError::Disconnected) => break,
                 }
@@ -115,21 +128,30 @@ mod windows_monitor {
         });
     }
 
+    fn elapsed_ms(started_at: Instant) -> u64 {
+        started_at
+            .elapsed()
+            .as_millis()
+            .try_into()
+            .unwrap_or(u64::MAX)
+    }
+
     fn handle_mouse_event(
         app: &tauri::AppHandle,
         drag_start: &mut Option<Point>,
         pending_selection: &mut Option<PendingSelection>,
         event: MouseButtonEvent,
+        now_ms: u64,
     ) {
         if let MouseButtonEvent::Move(position) = event {
-            let hover_radius = current_config(app)
-                .map(|config| config.hover_radius)
-                .unwrap_or(90.0);
+            let config = current_config(app).unwrap_or_default();
             match hover_action_for_pending_selection_when_idle(
-                pending_selection.as_ref(),
+                pending_selection,
                 drag_start.as_ref(),
                 position,
-                hover_radius,
+                config.hover_radius,
+                now_ms,
+                config.hover_delay_ms,
             ) {
                 PendingSelectionHoverAction::CaptureAndShowButton { anchor } => {
                     if capture_store_and_show_floating_button(app, anchor) {
@@ -248,7 +270,9 @@ mod windows_monitor {
         };
 
         if let Some(context) = read_current_selection_context(anchor, &config) {
-            app.state::<AppState>().store_latest_selection(context);
+            app.state::<AppState>()
+                .store_latest_selection(context.clone());
+            emit_context_if_panel_visible(app, &context);
             show_floating_button(app.clone(), anchor).is_ok()
         } else {
             false
@@ -275,6 +299,18 @@ mod windows_monitor {
     fn clear_selection_and_hide_button(app: &tauri::AppHandle) {
         app.state::<AppState>().clear_latest_selection();
         let _ = hide_floating_button(app.clone());
+    }
+
+    fn emit_context_if_panel_visible(
+        app: &tauri::AppHandle,
+        context: &crate::commands::selection::PanelContext,
+    ) {
+        let Some(window) = app.get_webview_window("ai-panel") else {
+            return;
+        };
+        if window.is_visible().unwrap_or(false) {
+            let _ = emit_panel_context(app, context);
+        }
     }
 
     fn assistant_window_rects(app: &tauri::AppHandle) -> Vec<Rect> {
@@ -487,13 +523,52 @@ mod windows_monitor {
                 return None;
             }
 
-            if unicode_text_available {
-                read_clipboard_unicode_from_open().map(ClipboardRestorePlan::Text)
-            } else {
+            if format_count == 0 {
                 Some(ClipboardRestorePlan::Empty)
+            } else {
+                snapshot_clipboard_formats(format_count as u32).map(ClipboardRestorePlan::Formats)
             }
         })
         .flatten()
+    }
+
+    unsafe fn snapshot_clipboard_formats(
+        format_count: u32,
+    ) -> Option<Vec<ClipboardFormatSnapshot>> {
+        let mut snapshots = Vec::with_capacity(format_count as usize);
+        let mut format = 0u32;
+
+        loop {
+            format = EnumClipboardFormats(format);
+            if format == 0 {
+                break;
+            }
+
+            let handle = GetClipboardData(format);
+            if handle.is_null() {
+                return None;
+            }
+
+            let size = GlobalSize(handle);
+            if size == 0 {
+                return None;
+            }
+
+            let ptr = GlobalLock(handle) as *const u8;
+            if ptr.is_null() {
+                return None;
+            }
+
+            let data = std::slice::from_raw_parts(ptr, size).to_vec();
+            GlobalUnlock(handle);
+            snapshots.push(ClipboardFormatSnapshot { format, data });
+        }
+
+        if snapshots.len() == format_count as usize {
+            Some(snapshots)
+        } else {
+            None
+        }
     }
 
     fn restore_clipboard_with_retry(plan: ClipboardRestorePlan) -> bool {
@@ -516,6 +591,7 @@ mod windows_monitor {
     fn restore_clipboard(plan: ClipboardRestorePlan) -> bool {
         match plan {
             ClipboardRestorePlan::Text(text) => write_clipboard_unicode(&text),
+            ClipboardRestorePlan::Formats(formats) => write_clipboard_formats(&formats),
             ClipboardRestorePlan::Empty => empty_clipboard(),
         }
     }
@@ -571,6 +647,36 @@ mod windows_monitor {
         let text = String::from_utf16_lossy(std::slice::from_raw_parts(ptr, len));
         GlobalUnlock(handle);
         Some(text)
+    }
+
+    fn write_clipboard_formats(formats: &[ClipboardFormatSnapshot]) -> bool {
+        with_open_clipboard(|| unsafe {
+            let _ = EmptyClipboard();
+
+            for snapshot in formats {
+                let handle = GlobalAlloc(GMEM_MOVEABLE, snapshot.data.len());
+                if handle.is_null() {
+                    return false;
+                }
+
+                let ptr = GlobalLock(handle) as *mut u8;
+                if ptr.is_null() {
+                    let _ = GlobalFree(handle);
+                    return false;
+                }
+
+                std::ptr::copy_nonoverlapping(snapshot.data.as_ptr(), ptr, snapshot.data.len());
+                GlobalUnlock(handle);
+
+                if SetClipboardData(snapshot.format, handle).is_null() {
+                    let _ = GlobalFree(handle);
+                    return false;
+                }
+            }
+
+            true
+        })
+        .unwrap_or(false)
     }
 
     fn write_clipboard_unicode(text: &str) -> bool {

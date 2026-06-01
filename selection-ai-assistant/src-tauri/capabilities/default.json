@@ -1,0 +1,13 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Allow local app windows to use the Tauri APIs required by the assistant UI.",
+  "windows": ["main", "floating-button", "ai-panel"],
+  "permissions": [
+    "core:default",
+    "core:event:default",
+    "core:window:default",
+    "core:window:allow-start-dragging",
+    "opener:default"
+  ]
+}

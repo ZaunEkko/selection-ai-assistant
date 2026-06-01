@@ -33,12 +33,19 @@ pub fn should_prepare_conservative_clipboard_capture(
     format_count: u32,
     unicode_text_available: bool,
 ) -> bool {
-    format_count == 0 || (format_count == 1 && unicode_text_available)
+    format_count == 0 || unicode_text_available
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClipboardFormatSnapshot {
+    pub format: u32,
+    pub data: Vec<u8>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ClipboardRestorePlan {
     Text(String),
+    Formats(Vec<ClipboardFormatSnapshot>),
     Empty,
 }
 

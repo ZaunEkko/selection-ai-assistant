@@ -97,6 +97,7 @@ pub enum MouseUpAction {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PendingSelection {
     pub anchor: Point,
+    pub hover_started_at_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -163,7 +164,10 @@ pub fn apply_mouse_up_action_to_pending_selection(
 ) -> SelectionMouseUpEffect {
     match action {
         MouseUpAction::ArmSelection { anchor } => {
-            *pending_selection = Some(PendingSelection { anchor });
+            *pending_selection = Some(PendingSelection {
+                anchor,
+                hover_started_at_ms: None,
+            });
             SelectionMouseUpEffect::PendingAnchorArmedAndClearSelectionAndHide
         }
         MouseUpAction::ClearSelection => {
@@ -175,33 +179,63 @@ pub fn apply_mouse_up_action_to_pending_selection(
 }
 
 pub fn hover_action_for_pending_selection_when_idle(
-    pending: Option<&PendingSelection>,
+    pending_selection: &mut Option<PendingSelection>,
     drag_start: Option<&Point>,
     position: Point,
     hover_radius: f64,
+    now_ms: u64,
+    hover_delay_ms: u64,
 ) -> PendingSelectionHoverAction {
     if drag_start.is_some() {
+        reset_hover_dwell(pending_selection);
         PendingSelectionHoverAction::KeepPending
     } else {
-        hover_action_for_pending_selection(pending, position, hover_radius)
+        hover_action_for_pending_selection(
+            pending_selection,
+            position,
+            hover_radius,
+            now_ms,
+            hover_delay_ms,
+        )
     }
 }
 
 pub fn hover_action_for_pending_selection(
-    pending: Option<&PendingSelection>,
+    pending_selection: &mut Option<PendingSelection>,
     position: Point,
     hover_radius: f64,
+    now_ms: u64,
+    hover_delay_ms: u64,
 ) -> PendingSelectionHoverAction {
-    let Some(pending) = pending else {
+    let Some(pending) = pending_selection.as_mut() else {
         return PendingSelectionHoverAction::NoPendingSelection;
     };
 
     if is_drag_distance_met(pending.anchor, position, hover_radius) {
-        PendingSelectionHoverAction::KeepPending
-    } else {
+        pending.hover_started_at_ms = None;
+        return PendingSelectionHoverAction::KeepPending;
+    }
+
+    let hover_started_at_ms = match pending.hover_started_at_ms {
+        Some(hover_started_at_ms) => hover_started_at_ms,
+        None => {
+            pending.hover_started_at_ms = Some(now_ms);
+            return PendingSelectionHoverAction::KeepPending;
+        }
+    };
+
+    if now_ms.saturating_sub(hover_started_at_ms) >= hover_delay_ms {
         PendingSelectionHoverAction::CaptureAndShowButton {
             anchor: pending.anchor,
         }
+    } else {
+        PendingSelectionHoverAction::KeepPending
+    }
+}
+
+fn reset_hover_dwell(pending_selection: &mut Option<PendingSelection>) {
+    if let Some(pending) = pending_selection.as_mut() {
+        pending.hover_started_at_ms = None;
     }
 }
 

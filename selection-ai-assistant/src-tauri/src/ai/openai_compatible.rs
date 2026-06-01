@@ -1,9 +1,15 @@
+use std::time::Duration;
+
 use futures_util::StreamExt;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::config::AiProviderConfig;
+
+const MODELS_REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+const MAX_PROVIDER_ERROR_DETAIL_LEN: usize = 500;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ChatMessage {
@@ -76,7 +82,10 @@ pub struct OpenAiCompatibleClient {
 impl OpenAiCompatibleClient {
     pub fn new() -> Self {
         Self {
-            http: reqwest::Client::new(),
+            http: reqwest::Client::builder()
+                .connect_timeout(CONNECT_TIMEOUT)
+                .build()
+                .expect("OpenAI-compatible HTTP client should build"),
         }
     }
 
@@ -172,6 +181,7 @@ impl OpenAiCompatibleClient {
         let response = self
             .http
             .get(endpoint)
+            .timeout(MODELS_REQUEST_TIMEOUT)
             .bearer_auth(api_key)
             .headers(headers)
             .send()
@@ -179,10 +189,7 @@ impl OpenAiCompatibleClient {
             .map_err(|err| AiClientError::Request(err.to_string()))?;
 
         if !response.status().is_success() {
-            return Err(AiClientError::Request(format!(
-                "HTTP {}",
-                response.status()
-            )));
+            return Err(response_error(response, provider, api_key).await);
         }
 
         let body = response
@@ -218,10 +225,7 @@ impl OpenAiCompatibleClient {
             .map_err(|err| AiClientError::Request(err.to_string()))?;
 
         if !response.status().is_success() {
-            return Err(AiClientError::Request(format!(
-                "HTTP {}",
-                response.status()
-            )));
+            return Err(response_error(response, provider, api_key).await);
         }
 
         let mut buffer = Vec::new();
@@ -248,6 +252,70 @@ impl OpenAiCompatibleClient {
 
         Ok(())
     }
+}
+
+async fn response_error(
+    response: reqwest::Response,
+    provider: &AiProviderConfig,
+    api_key: &str,
+) -> AiClientError {
+    let status = response.status();
+    let body = response.text().await.unwrap_or_default();
+    let detail = provider_error_detail(&body, &redaction_secrets(provider, api_key));
+    let message = match detail {
+        Some(detail) => format!("HTTP {status}: {detail}"),
+        None => format!("HTTP {status}"),
+    };
+    AiClientError::Request(message)
+}
+
+fn redaction_secrets(provider: &AiProviderConfig, api_key: &str) -> Vec<String> {
+    let mut secrets = Vec::new();
+    let api_key = api_key.trim();
+    if !api_key.is_empty() {
+        secrets.push(api_key.to_string());
+    }
+
+    for (name, value) in &provider.headers {
+        let value = value.trim();
+        if !value.is_empty() && is_sensitive_header_name(name) {
+            secrets.push(value.to_string());
+        }
+    }
+
+    secrets
+}
+
+fn is_sensitive_header_name(name: &str) -> bool {
+    let normalized = name.trim().to_ascii_lowercase();
+    normalized == "authorization"
+        || normalized == "proxy-authorization"
+        || normalized.contains("api-key")
+        || normalized.contains("apikey")
+        || normalized.contains("token")
+        || normalized.contains("secret")
+}
+
+fn provider_error_detail(body: &str, secrets: &[String]) -> Option<String> {
+    let value: serde_json::Value = serde_json::from_str(body).ok()?;
+    let message = value
+        .pointer("/error/message")
+        .or_else(|| value.get("message"))
+        .and_then(|message| message.as_str())?;
+    let mut sanitized = message.split_whitespace().collect::<Vec<_>>().join(" ");
+    for secret in secrets {
+        sanitized = sanitized.replace(secret, "[redacted]");
+    }
+    let sanitized = sanitized.trim();
+    if sanitized.is_empty() {
+        return None;
+    }
+    Some(
+        sanitized
+            .chars()
+            .take(MAX_PROVIDER_ERROR_DETAIL_LEN)
+            .collect(),
+    )
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

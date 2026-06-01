@@ -90,6 +90,11 @@ pub fn open_panel_for_text(app: AppHandle, text: String) -> Result<PanelContext,
 }
 
 #[tauri::command]
+pub fn get_latest_panel_context(state: State<AppState>) -> Option<PanelContext> {
+    state.latest_selection()
+}
+
+#[tauri::command]
 pub fn open_panel_for_current_selection(
     app: AppHandle,
     state: State<AppState>,
