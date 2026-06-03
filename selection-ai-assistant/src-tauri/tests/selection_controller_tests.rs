@@ -1,7 +1,9 @@
 use selection_ai_assistant_lib::selection::controller::{
     is_point_near_anchor, SelectionController, SelectionEvent, SelectionStateKind,
 };
-use selection_ai_assistant_lib::selection::types::{SelectionCandidate, SelectionReadMethod};
+use selection_ai_assistant_lib::selection::types::{
+    SelectionAnchorSource, SelectionCandidate, SelectionReadMethod,
+};
 use selection_ai_assistant_lib::types::{Point, Rect};
 
 fn candidate() -> SelectionCandidate {
@@ -18,6 +20,9 @@ fn candidate() -> SelectionCandidate {
         }),
         fallback_point: Point { x: 120.0, y: 120.0 },
         read_method: SelectionReadMethod::UiAutomation,
+        selection_rects: Vec::new(),
+        explicit_anchor: None,
+        anchor_source: None,
     }
 }
 
@@ -74,4 +79,27 @@ fn creates_clipboard_candidate_with_generated_id() {
     assert_eq!(candidate.text, "selected text");
     assert_eq!(candidate.read_method, SelectionReadMethod::Clipboard);
     assert_eq!(candidate.anchor_rect, None);
+}
+
+#[test]
+fn candidate_anchor_point_prefers_selection_rects_over_fallback_point() {
+    let candidate = SelectionCandidate {
+        id: "sel-real-anchor".to_string(),
+        text: "selected".to_string(),
+        source_app: "app".to_string(),
+        window_title: "window".to_string(),
+        read_method: SelectionReadMethod::UiAutomation,
+        anchor_rect: None,
+        selection_rects: vec![Rect {
+            x: 100.0,
+            y: 200.0,
+            width: 80.0,
+            height: 20.0,
+        }],
+        explicit_anchor: None,
+        anchor_source: Some(SelectionAnchorSource::UiAutomationRects),
+        fallback_point: Point { x: 10.0, y: 10.0 },
+    };
+
+    assert_eq!(candidate.anchor_point(), Point { x: 140.0, y: 210.0 });
 }

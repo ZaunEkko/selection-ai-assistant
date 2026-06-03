@@ -1,15 +1,48 @@
 use tauri::{
     menu::{MenuBuilder, MenuItemBuilder},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    Manager, WindowEvent,
+    Emitter, Manager, WindowEvent,
+};
+
+use crate::{
+    app_state::AppState,
+    config::{AppConfig, CloseButtonBehavior},
 };
 
 const MAIN_WINDOW_LABEL: &str = "main";
 const TRAY_SHOW_SETTINGS_ID: &str = "show-settings";
 const TRAY_QUIT_ID: &str = "quit";
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CloseRequestAction {
+    Ignore,
+    AskUser,
+    MinimizeToTray,
+    ExitApp,
+}
+
+pub fn should_show_main_window_on_startup(config: &AppConfig) -> bool {
+    !config.start_minimized_to_tray
+}
+
+pub fn close_request_action_for_window(
+    label: &str,
+    behavior: CloseButtonBehavior,
+) -> CloseRequestAction {
+    if label != MAIN_WINDOW_LABEL {
+        return CloseRequestAction::Ignore;
+    }
+
+    match behavior {
+        CloseButtonBehavior::Ask => CloseRequestAction::AskUser,
+        CloseButtonBehavior::MinimizeToTray => CloseRequestAction::MinimizeToTray,
+        CloseButtonBehavior::ExitApp => CloseRequestAction::ExitApp,
+    }
+}
+
 pub fn should_hide_to_background_on_close(label: &str) -> bool {
-    label == MAIN_WINDOW_LABEL
+    close_request_action_for_window(label, CloseButtonBehavior::MinimizeToTray)
+        == CloseRequestAction::MinimizeToTray
 }
 
 pub fn show_main_window(app: &tauri::AppHandle) -> tauri::Result<()> {
@@ -18,6 +51,48 @@ pub fn show_main_window(app: &tauri::AppHandle) -> tauri::Result<()> {
         window.show()?;
         window.set_focus()?;
     }
+    Ok(())
+}
+
+pub fn apply_startup_visibility(app: &tauri::App) -> tauri::Result<()> {
+    let should_show = app
+        .try_state::<AppState>()
+        .and_then(|state| {
+            state
+                .config
+                .lock()
+                .ok()
+                .map(|config| should_show_main_window_on_startup(&config))
+        })
+        .unwrap_or(true);
+
+    if should_show {
+        show_main_window(app.handle())?;
+    } else if let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) {
+        window.hide()?;
+    }
+
+    Ok(())
+}
+
+pub fn apply_main_close_choice(
+    app: &tauri::AppHandle,
+    behavior: CloseButtonBehavior,
+) -> tauri::Result<()> {
+    match behavior {
+        CloseButtonBehavior::Ask => {
+            if let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) {
+                window.emit("main_close_confirmation_requested", ())?;
+            }
+        }
+        CloseButtonBehavior::MinimizeToTray => {
+            if let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) {
+                window.hide()?;
+            }
+        }
+        CloseButtonBehavior::ExitApp => app.exit(0),
+    }
+
     Ok(())
 }
 
@@ -59,10 +134,38 @@ pub fn setup_background_lifecycle(app: &tauri::App) -> tauri::Result<()> {
 }
 
 pub fn handle_window_event(window: &tauri::Window, event: &WindowEvent) {
-    if should_hide_to_background_on_close(window.label()) {
-        if let WindowEvent::CloseRequested { api, .. } = event {
+    let WindowEvent::CloseRequested { api, .. } = event else {
+        return;
+    };
+
+    match configured_close_request_action(window) {
+        CloseRequestAction::Ignore => {}
+        CloseRequestAction::AskUser => {
+            api.prevent_close();
+            let _ = window.emit("main_close_confirmation_requested", ());
+        }
+        CloseRequestAction::MinimizeToTray => {
             api.prevent_close();
             let _ = window.hide();
         }
+        CloseRequestAction::ExitApp => {
+            api.prevent_close();
+            window.app_handle().exit(0);
+        }
     }
+}
+
+fn configured_close_request_action(window: &tauri::Window) -> CloseRequestAction {
+    let behavior = window
+        .try_state::<AppState>()
+        .and_then(|state| {
+            state
+                .config
+                .lock()
+                .ok()
+                .map(|config| config.close_button_behavior)
+        })
+        .unwrap_or_default();
+
+    close_request_action_for_window(window.label(), behavior)
 }

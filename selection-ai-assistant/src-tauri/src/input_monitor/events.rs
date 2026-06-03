@@ -101,6 +101,18 @@ pub struct PendingSelection {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
+pub struct VisibleFloatingButton {
+    pub anchor: Point,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum VisibleFloatingButtonAction {
+    NoVisibleButton,
+    KeepVisible,
+    HideAndRearmSelection { anchor: Point },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum PendingSelectionHoverAction {
     NoPendingSelection,
     KeepPending,
@@ -204,8 +216,8 @@ pub fn hover_action_for_pending_selection(
     pending_selection: &mut Option<PendingSelection>,
     position: Point,
     hover_radius: f64,
-    now_ms: u64,
-    hover_delay_ms: u64,
+    _now_ms: u64,
+    _hover_delay_ms: u64,
 ) -> PendingSelectionHoverAction {
     let Some(pending) = pending_selection.as_mut() else {
         return PendingSelectionHoverAction::NoPendingSelection;
@@ -216,21 +228,34 @@ pub fn hover_action_for_pending_selection(
         return PendingSelectionHoverAction::KeepPending;
     }
 
-    let hover_started_at_ms = match pending.hover_started_at_ms {
-        Some(hover_started_at_ms) => hover_started_at_ms,
-        None => {
-            pending.hover_started_at_ms = Some(now_ms);
-            return PendingSelectionHoverAction::KeepPending;
-        }
+    PendingSelectionHoverAction::CaptureAndShowButton {
+        anchor: pending.anchor,
+    }
+}
+
+pub fn visible_floating_button_action_when_idle(
+    visible_button: &mut Option<VisibleFloatingButton>,
+    drag_start: Option<&Point>,
+    position: Point,
+    hover_radius: f64,
+    assistant_windows: &[Rect],
+) -> VisibleFloatingButtonAction {
+    let Some(button) = visible_button.as_ref() else {
+        return VisibleFloatingButtonAction::NoVisibleButton;
     };
 
-    if now_ms.saturating_sub(hover_started_at_ms) >= hover_delay_ms {
-        PendingSelectionHoverAction::CaptureAndShowButton {
-            anchor: pending.anchor,
-        }
-    } else {
-        PendingSelectionHoverAction::KeepPending
+    if drag_start.is_some()
+        || !is_drag_distance_met(button.anchor, position, hover_radius)
+        || assistant_windows
+            .iter()
+            .any(|window| rect_contains(*window, position))
+    {
+        return VisibleFloatingButtonAction::KeepVisible;
     }
+
+    let anchor = button.anchor;
+    *visible_button = None;
+    VisibleFloatingButtonAction::HideAndRearmSelection { anchor }
 }
 
 fn reset_hover_dwell(pending_selection: &mut Option<PendingSelection>) {

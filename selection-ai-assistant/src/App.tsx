@@ -3,6 +3,7 @@ import { openPanelFromFloatingButton } from './api/tauri';
 import { AiPanel } from './windows/AiPanel';
 import { FloatingButton } from './windows/FloatingButton';
 import { Settings } from './windows/Settings';
+import { SourceTextWindow } from './windows/SourceTextWindow';
 
 export default function App() {
   const label = getCurrentWindow().label;
@@ -13,6 +14,10 @@ export default function App() {
 
   if (label === 'ai-panel') {
     return <AiPanel />;
+  }
+
+  if (label === 'source-text') {
+    return <SourceTextWindow />;
   }
 
   return <Settings />;

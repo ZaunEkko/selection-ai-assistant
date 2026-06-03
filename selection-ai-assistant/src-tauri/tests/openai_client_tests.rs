@@ -2,7 +2,7 @@ use selection_ai_assistant_lib::ai::openai_compatible::{
     build_chat_request, extract_delta_content, extract_sse_deltas_from_bytes, AiClientError,
     ChatMessage, OpenAiCompatibleClient,
 };
-use selection_ai_assistant_lib::config::AiProviderConfig;
+use selection_ai_assistant_lib::config::{AiProviderConfig, AiProviderKind};
 
 #[test]
 fn builds_openai_compatible_chat_request() {
@@ -65,6 +65,7 @@ fn validates_provider_headers() {
         name: "Test".to_string(),
         base_url: "https://example.com/v1".to_string(),
         model: "gpt-test".to_string(),
+        provider_kind: AiProviderKind::OpenAiCompatible,
         api_key: "test-api-key".to_string(),
         api_key_ref: "credential://test".to_string(),
         headers: vec![("X-App".to_string(), "selection-ai".to_string())],
@@ -85,6 +86,7 @@ fn rejects_invalid_provider_header_names() {
         name: "Test".to_string(),
         base_url: "https://example.com/v1".to_string(),
         model: "gpt-test".to_string(),
+        provider_kind: AiProviderKind::OpenAiCompatible,
         api_key: "test-api-key".to_string(),
         api_key_ref: "credential://test".to_string(),
         headers: vec![("bad header".to_string(), "value".to_string())],

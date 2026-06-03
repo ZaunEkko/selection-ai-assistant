@@ -1,5 +1,5 @@
 use selection_ai_assistant_lib::floating_window::positioning::{
-    place_near_anchor, ScreenBounds, WindowSize,
+    place_near_anchor, place_source_left_of_panel, ScreenBounds, WindowSize,
 };
 use selection_ai_assistant_lib::types::Point;
 
@@ -67,6 +67,57 @@ fn flips_panel_above_anchor_when_bottom_space_is_insufficient() {
     );
 
     assert_eq!(position.y, 668.0);
+}
+
+#[test]
+fn shifts_panel_right_when_source_window_needs_left_side_space() {
+    let layout = place_source_left_of_panel(
+        Point { x: 20.0, y: 100.0 },
+        WindowSize {
+            width: 520.0,
+            height: 620.0,
+        },
+        WindowSize {
+            width: 360.0,
+            height: 620.0,
+        },
+        ScreenBounds {
+            x: 0.0,
+            y: 0.0,
+            width: 1920.0,
+            height: 1080.0,
+        },
+        12.0,
+    );
+
+    assert_eq!(layout.source.x, 0.0);
+    assert_eq!(layout.panel.x, 372.0);
+    assert_eq!(layout.source.x + 360.0 + 12.0, layout.panel.x);
+}
+
+#[test]
+fn keeps_panel_position_when_left_side_has_room_for_source_window() {
+    let layout = place_source_left_of_panel(
+        Point { x: 600.0, y: 100.0 },
+        WindowSize {
+            width: 520.0,
+            height: 620.0,
+        },
+        WindowSize {
+            width: 360.0,
+            height: 620.0,
+        },
+        ScreenBounds {
+            x: 0.0,
+            y: 0.0,
+            width: 1920.0,
+            height: 1080.0,
+        },
+        12.0,
+    );
+
+    assert_eq!(layout.panel.x, 600.0);
+    assert_eq!(layout.source.x, 228.0);
 }
 
 #[test]

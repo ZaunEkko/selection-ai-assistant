@@ -1,7 +1,10 @@
 use selection_ai_assistant_lib::ai::action_classifier::AiAction;
+use selection_ai_assistant_lib::app_state::AppState;
 use selection_ai_assistant_lib::commands::selection::{
     create_panel_context_for_selection, create_panel_context_for_text,
+    panel_context_for_visible_refresh,
 };
+use selection_ai_assistant_lib::config::AppConfig;
 use selection_ai_assistant_lib::selection::types::{SelectionCandidate, SelectionReadMethod};
 use selection_ai_assistant_lib::types::Point;
 
@@ -34,6 +37,39 @@ fn creates_auto_run_context_for_selection_candidate() {
     assert_eq!(context.selection, selection);
     assert_eq!(context.action, AiAction::TranslateExplain);
     assert!(context.auto_run);
+}
+
+#[test]
+fn visible_panel_refresh_never_preserves_auto_run() {
+    let selection = SelectionCandidate::from_clipboard_text(
+        "selected text".to_string(),
+        "unknown".to_string(),
+        "Unknown window".to_string(),
+        Point { x: 10.0, y: 20.0 },
+    );
+    let context = create_panel_context_for_selection(selection, true).unwrap();
+
+    let refreshed = panel_context_for_visible_refresh(&context);
+
+    assert!(!refreshed.auto_run);
+    assert_eq!(refreshed.selection.text, "selected text");
+    assert_eq!(refreshed.action, context.action);
+}
+
+#[test]
+fn storing_latest_selection_also_updates_latest_source_text() {
+    let state = AppState::new(AppConfig::default());
+    let selection = SelectionCandidate::from_clipboard_text(
+        "selected text".to_string(),
+        "unknown".to_string(),
+        "Unknown window".to_string(),
+        Point { x: 10.0, y: 20.0 },
+    );
+    let context = create_panel_context_for_selection(selection, false).unwrap();
+
+    state.store_latest_selection(context);
+
+    assert_eq!(state.latest_source_text().as_deref(), Some("selected text"));
 }
 
 #[test]
