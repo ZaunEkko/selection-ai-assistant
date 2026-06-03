@@ -35,3 +35,15 @@ fn falls_back_for_tiny_or_empty_text() {
     assert_eq!(classify_action(""), AiAction::MenuFallback);
     assert_eq!(classify_action("a"), AiAction::MenuFallback);
 }
+
+#[test]
+fn serializes_expand_prompt_action_as_camel_case() {
+    assert_eq!(
+        serde_json::from_str::<AiAction>("\"expandPrompt\"").unwrap(),
+        AiAction::ExpandPrompt,
+    );
+    assert_eq!(
+        serde_json::to_string(&AiAction::ExpandPrompt).unwrap(),
+        "\"expandPrompt\"",
+    );
+}

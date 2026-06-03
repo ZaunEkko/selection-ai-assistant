@@ -1,8 +1,8 @@
 # Dependencies
 node_modules/
 
-# Local planning/spec docs
-docs/
+# Local temporary/sensitive working files
+temp/
 
 # Frontend build output
 dist/

@@ -17,15 +17,16 @@
         "width": 900,
         "height": 700,
         "resizable": true,
-        "visible": true
+        "visible": false
       },
       {
         "label": "floating-button",
         "title": "AI",
-        "width": 56,
-        "height": 44,
+        "width": 40,
+        "height": 40,
         "decorations": false,
         "transparent": true,
+        "shadow": false,
         "alwaysOnTop": true,
         "visible": false,
         "skipTaskbar": true
@@ -39,6 +40,16 @@
         "alwaysOnTop": true,
         "visible": false,
         "skipTaskbar": true
+      },
+      {
+        "label": "source-text",
+        "title": "Selected Text",
+        "width": 360,
+        "height": 620,
+        "decorations": false,
+        "alwaysOnTop": true,
+        "visible": false,
+        "skipTaskbar": true
       }
     ],
     "security": {
@@ -47,6 +58,7 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all"
+    "targets": "all",
+    "icon": ["icons/icon.ico"]
   }
 }

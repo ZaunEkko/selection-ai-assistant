@@ -1,7 +1,8 @@
-use tauri::State;
+use tauri::{AppHandle, State};
 
+use crate::app_lifecycle;
 use crate::app_state::AppState;
-use crate::config::{AiProviderConfig, AppConfig};
+use crate::config::{AiProviderConfig, AppBehaviorConfig, AppConfig, CloseButtonBehavior};
 use crate::types::PublicError;
 
 #[tauri::command]
@@ -18,6 +19,61 @@ pub fn get_config_from_state(state: &AppState) -> Result<AppConfig, PublicError>
             code: "config_lock_failed".to_string(),
             message: err.to_string(),
         })
+}
+
+#[tauri::command]
+pub fn save_app_behavior_config(
+    state: State<'_, AppState>,
+    preferences: AppBehaviorConfig,
+) -> Result<AppConfig, PublicError> {
+    save_app_behavior_config_in_state(&state, preferences)
+}
+
+pub fn save_app_behavior_config_in_state(
+    state: &AppState,
+    preferences: AppBehaviorConfig,
+) -> Result<AppConfig, PublicError> {
+    let mut config = state.config.lock().map_err(|err| PublicError {
+        code: "config_lock_failed".to_string(),
+        message: err.to_string(),
+    })?;
+
+    let mut candidate = config.clone();
+    candidate.start_minimized_to_tray = preferences.start_minimized_to_tray;
+    candidate.close_button_behavior = preferences.close_button_behavior;
+
+    if let Some(path) = &state.settings_path {
+        candidate.save_to_path(path).map_err(|err| PublicError {
+            code: "config_save_failed".to_string(),
+            message: format!("Failed to save settings: {err}"),
+        })?;
+    }
+
+    *config = candidate.clone();
+    Ok(candidate)
+}
+
+#[tauri::command]
+pub fn confirm_main_window_close(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    behavior: CloseButtonBehavior,
+) -> Result<AppConfig, PublicError> {
+    let current = get_config_from_state(&state)?;
+    let config = save_app_behavior_config_in_state(
+        &state,
+        AppBehaviorConfig {
+            start_minimized_to_tray: current.start_minimized_to_tray,
+            close_button_behavior: behavior,
+        },
+    )?;
+
+    app_lifecycle::apply_main_close_choice(&app, behavior).map_err(|err| PublicError {
+        code: "main_close_choice_failed".to_string(),
+        message: err.to_string(),
+    })?;
+
+    Ok(config)
 }
 
 #[tauri::command]
@@ -39,10 +95,10 @@ pub fn save_provider_config_in_state(
         });
     }
 
-    if provider.base_url.trim().is_empty() || provider.model.trim().is_empty() {
+    if provider.base_url.trim().is_empty() {
         return Err(PublicError {
             code: "provider_config_incomplete".to_string(),
-            message: "Provider base URL and model are required.".to_string(),
+            message: "Provider base URL is required.".to_string(),
         });
     }
 
@@ -51,15 +107,26 @@ pub fn save_provider_config_in_state(
         message: err.to_string(),
     })?;
 
-    if let Some(existing) = config.providers.iter_mut().find(|item| item.id == provider.id) {
+    let mut candidate = config.clone();
+    if let Some(existing) = candidate
+        .providers
+        .iter_mut()
+        .find(|item| item.id == provider.id)
+    {
         *existing = provider.clone();
     } else {
-        config.providers.push(provider.clone());
+        candidate.providers.push(provider.clone());
     }
 
-    if config.default_provider_id.is_none() {
-        config.default_provider_id = Some(provider.id);
+    candidate.default_provider_id = Some(provider.id);
+
+    if let Some(path) = &state.settings_path {
+        candidate.save_to_path(path).map_err(|err| PublicError {
+            code: "config_save_failed".to_string(),
+            message: format!("Failed to save settings: {err}"),
+        })?;
     }
 
-    Ok(config.clone())
+    *config = candidate.clone();
+    Ok(candidate)
 }
