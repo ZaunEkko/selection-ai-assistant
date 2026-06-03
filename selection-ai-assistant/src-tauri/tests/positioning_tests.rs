@@ -1,5 +1,5 @@
 use selection_ai_assistant_lib::floating_window::positioning::{
-    place_near_anchor, ScreenBounds, WindowSize,
+    place_near_anchor, place_source_left_of_panel, ScreenBounds, WindowSize,
 };
 use selection_ai_assistant_lib::types::Point;
 
@@ -28,7 +28,10 @@ fn places_window_near_anchor_inside_screen() {
 #[test]
 fn clamps_window_at_right_edge() {
     let position = place_near_anchor(
-        Point { x: 1900.0, y: 900.0 },
+        Point {
+            x: 1900.0,
+            y: 900.0,
+        },
         WindowSize {
             width: 320.0,
             height: 240.0,
@@ -42,4 +45,96 @@ fn clamps_window_at_right_edge() {
     );
 
     assert_eq!(position.x, 1600.0);
+}
+
+#[test]
+fn flips_panel_above_anchor_when_bottom_space_is_insufficient() {
+    let position = place_near_anchor(
+        Point {
+            x: 500.0,
+            y: 1040.0,
+        },
+        WindowSize {
+            width: 420.0,
+            height: 360.0,
+        },
+        ScreenBounds {
+            x: 0.0,
+            y: 0.0,
+            width: 1920.0,
+            height: 1080.0,
+        },
+    );
+
+    assert_eq!(position.y, 668.0);
+}
+
+#[test]
+fn shifts_panel_right_when_source_window_needs_left_side_space() {
+    let layout = place_source_left_of_panel(
+        Point { x: 20.0, y: 100.0 },
+        WindowSize {
+            width: 520.0,
+            height: 620.0,
+        },
+        WindowSize {
+            width: 360.0,
+            height: 620.0,
+        },
+        ScreenBounds {
+            x: 0.0,
+            y: 0.0,
+            width: 1920.0,
+            height: 1080.0,
+        },
+        12.0,
+    );
+
+    assert_eq!(layout.source.x, 0.0);
+    assert_eq!(layout.panel.x, 372.0);
+    assert_eq!(layout.source.x + 360.0 + 12.0, layout.panel.x);
+}
+
+#[test]
+fn keeps_panel_position_when_left_side_has_room_for_source_window() {
+    let layout = place_source_left_of_panel(
+        Point { x: 600.0, y: 100.0 },
+        WindowSize {
+            width: 520.0,
+            height: 620.0,
+        },
+        WindowSize {
+            width: 360.0,
+            height: 620.0,
+        },
+        ScreenBounds {
+            x: 0.0,
+            y: 0.0,
+            width: 1920.0,
+            height: 1080.0,
+        },
+        12.0,
+    );
+
+    assert_eq!(layout.panel.x, 600.0);
+    assert_eq!(layout.source.x, 228.0);
+}
+
+#[test]
+fn clamps_window_at_left_edge_and_handles_oversized_window() {
+    let position = place_near_anchor(
+        Point { x: -50.0, y: -20.0 },
+        WindowSize {
+            width: 2200.0,
+            height: 1200.0,
+        },
+        ScreenBounds {
+            x: 100.0,
+            y: 50.0,
+            width: 800.0,
+            height: 600.0,
+        },
+    );
+
+    assert_eq!(position, Point { x: 100.0, y: 50.0 });
 }

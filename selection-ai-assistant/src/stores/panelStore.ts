@@ -5,7 +5,7 @@ export type PanelSnapshot = {
 };
 
 export type PanelEvent =
-  | { type: 'start'; requestId: string }
+  | { type: 'start'; requestId: string; initialAnswer?: string }
   | { type: 'delta'; requestId: string; delta: string }
   | { type: 'finish'; requestId: string }
   | { type: 'reset' };
@@ -21,7 +21,7 @@ export function panelReducer(state: PanelSnapshot, event: PanelEvent): PanelSnap
     case 'start':
       return {
         activeRequestId: event.requestId,
-        answer: '',
+        answer: event.initialAnswer ?? '',
         running: true,
       };
     case 'delta':
