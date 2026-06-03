@@ -8,6 +8,7 @@ pub enum AiAction {
     Summarize,
     CodeExplain,
     ErrorExplain,
+    ExpandPrompt,
     MenuFallback,
 }
 
@@ -97,5 +98,6 @@ fn english_ratio(text: &str) -> f64 {
 }
 
 fn contains_cjk(text: &str) -> bool {
-    text.chars().any(|ch| ('\u{4e00}'..='\u{9fff}').contains(&ch))
+    text.chars()
+        .any(|ch| ('\u{4e00}'..='\u{9fff}').contains(&ch))
 }

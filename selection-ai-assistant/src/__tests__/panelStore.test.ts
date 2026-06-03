@@ -43,6 +43,22 @@ describe('panel store reducer', () => {
     expect(initialPanelState).toEqual({ activeRequestId: null, answer: '', running: false });
   });
 
+  it('can preserve existing answer text when starting a follow-up stream', () => {
+    const state = panelReducer(initialPanelState, {
+      type: 'start',
+      requestId: 'follow-up-request',
+      initialAnswer: '初始回答\n\n追问：继续解释\n\n回答：',
+    });
+    const withDelta = panelReducer(state, {
+      type: 'delta',
+      requestId: 'follow-up-request',
+      delta: '补充回答',
+    });
+
+    expect(withDelta.answer).toBe('初始回答\n\n追问：继续解释\n\n回答：补充回答');
+    expect(withDelta.running).toBe(true);
+  });
+
   it('keeps createPanelState methods bound when calls are destructured', () => {
     const state = createPanelState();
     const { startRequest, appendDelta, finishRequest, reset } = state;

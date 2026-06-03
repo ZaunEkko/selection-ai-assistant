@@ -2,9 +2,9 @@ import { describe, expect, it } from 'vitest';
 import { formatCommandError } from '../api/tauri';
 
 describe('formatCommandError', () => {
-  it('uses message from Tauri public error objects', () => {
+  it('formats common Tauri public error objects in Chinese', () => {
     expect(formatCommandError({ code: 'api_key_missing', message: 'Set SELECTION_AI_API_KEY before running an AI action.' })).toBe(
-      'Set SELECTION_AI_API_KEY before running an AI action.',
+      '请在设置中填写 API 密钥，或配置 SELECTION_AI_API_KEY 环境变量。',
     );
   });
 

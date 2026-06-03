@@ -1,23 +1,22 @@
 import type { UiAction } from '../api/tauri';
+import { actionOptions } from './actionLabels';
 
 type Props = {
   activeAction: UiAction;
-  onRun: (action: UiAction) => void;
+  onSelect: (action: UiAction) => void;
 };
 
-const actions: Array<[UiAction, string]> = [
-  ['translateExplain', '翻译解释'],
-  ['explain', '解释'],
-  ['summarize', '总结'],
-  ['codeExplain', '代码解释'],
-  ['errorExplain', '报错解释'],
-];
-
-export function ActionBar({ activeAction, onRun }: Props) {
+export function ActionBar({ activeAction, onSelect }: Props) {
   return (
-    <div className="action-bar" aria-label="AI actions">
-      {actions.map(([action, label]) => (
-        <button key={action} type="button" aria-pressed={activeAction === action} onClick={() => onRun(action)}>
+    <div className="action-bar" aria-label="AI 操作">
+      {actionOptions.map(([action, label]) => (
+        <button
+          key={action}
+          type="button"
+          className="action-switch-button"
+          aria-pressed={activeAction === action}
+          onClick={() => onSelect(action)}
+        >
           {label}
         </button>
       ))}
