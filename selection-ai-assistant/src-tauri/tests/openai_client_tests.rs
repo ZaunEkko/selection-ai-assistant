@@ -1,6 +1,8 @@
 use selection_ai_assistant_lib::ai::openai_compatible::{
-    build_chat_request, extract_delta_content, extract_sse_deltas_from_bytes, ChatMessage, OpenAiCompatibleClient,
+    build_chat_request, extract_delta_content, extract_sse_deltas_from_bytes, AiClientError,
+    ChatMessage, OpenAiCompatibleClient,
 };
+use selection_ai_assistant_lib::config::{AiProviderConfig, AiProviderKind};
 
 #[test]
 fn builds_openai_compatible_chat_request() {
@@ -27,6 +29,21 @@ fn creates_chat_completion_endpoint_from_base_url() {
 }
 
 #[test]
+fn creates_models_endpoint_from_base_url() {
+    let endpoint = OpenAiCompatibleClient::models_endpoint("https://api.openai.com/v1/").unwrap();
+    assert_eq!(endpoint, "https://api.openai.com/v1/models");
+}
+
+#[test]
+fn parses_model_ids_from_models_response() {
+    let ids = OpenAiCompatibleClient::parse_model_ids(
+        r#"{"data":[{"id":"gpt-4.1"},{"id":"gpt-4.1-mini"}]}"#,
+    )
+    .expect("models should parse");
+
+    assert_eq!(ids, vec!["gpt-4.1".to_string(), "gpt-4.1-mini".to_string()]);
+}
+#[test]
 fn extracts_stream_delta_content() {
     let data = r#"{"choices":[{"delta":{"content":"hello"}}]}"#;
     assert_eq!(extract_delta_content(data), Some("hello".to_string()));
@@ -35,7 +52,50 @@ fn extracts_stream_delta_content() {
 #[test]
 fn ignores_done_and_non_content_stream_payloads() {
     assert_eq!(extract_delta_content("[DONE]"), None);
-    assert_eq!(extract_delta_content(r#"{"choices":[{"delta":{"role":"assistant"}}]}"#), None);
+    assert_eq!(
+        extract_delta_content(r#"{"choices":[{"delta":{"role":"assistant"}}]}"#),
+        None
+    );
+}
+
+#[test]
+fn validates_provider_headers() {
+    let provider = AiProviderConfig {
+        id: "test".to_string(),
+        name: "Test".to_string(),
+        base_url: "https://example.com/v1".to_string(),
+        model: "gpt-test".to_string(),
+        provider_kind: AiProviderKind::OpenAiCompatible,
+        api_key: "test-api-key".to_string(),
+        api_key_ref: "credential://test".to_string(),
+        headers: vec![("X-App".to_string(), "selection-ai".to_string())],
+    };
+
+    let headers = OpenAiCompatibleClient::validated_provider_headers(&provider).unwrap();
+
+    assert_eq!(
+        headers.get("x-app").unwrap().to_str().unwrap(),
+        "selection-ai"
+    );
+}
+
+#[test]
+fn rejects_invalid_provider_header_names() {
+    let provider = AiProviderConfig {
+        id: "test".to_string(),
+        name: "Test".to_string(),
+        base_url: "https://example.com/v1".to_string(),
+        model: "gpt-test".to_string(),
+        provider_kind: AiProviderKind::OpenAiCompatible,
+        api_key: "test-api-key".to_string(),
+        api_key_ref: "credential://test".to_string(),
+        headers: vec![("bad header".to_string(), "value".to_string())],
+    };
+
+    assert!(matches!(
+        OpenAiCompatibleClient::validated_provider_headers(&provider),
+        Err(AiClientError::InvalidHeaderName { .. })
+    ));
 }
 
 #[test]
