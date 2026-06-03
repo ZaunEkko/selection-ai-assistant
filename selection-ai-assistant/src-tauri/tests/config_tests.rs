@@ -1,4 +1,36 @@
-use selection_ai_assistant_lib::config::AppConfig;
+use selection_ai_assistant_lib::config::{AiProviderKind, AppConfig, CloseButtonBehavior};
+
+#[test]
+fn release_binary_uses_windows_subsystem_to_avoid_console_window() {
+    let main_rs_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("src")
+        .join("main.rs");
+    let main_rs = std::fs::read_to_string(main_rs_path).expect("main.rs should load");
+
+    assert!(
+        main_rs.contains("windows_subsystem = \"windows\""),
+        "release Windows builds should not open an extra console window next to the app"
+    );
+}
+
+#[test]
+fn source_text_window_has_tauri_capability_permissions() {
+    let capabilities_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("capabilities")
+        .join("default.json");
+    let capabilities: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(capabilities_path).expect("capabilities file should load"),
+    )
+    .expect("capabilities file should be valid json");
+    let windows = capabilities["windows"]
+        .as_array()
+        .expect("capability windows should be an array");
+
+    assert!(
+        windows.iter().any(|window| window.as_str() == Some("source-text")),
+        "source-text window needs capability access to listen for source_text_context and invoke latest source recovery"
+    );
+}
 
 #[test]
 fn settings_path_uses_local_app_config_directory_when_available() {
@@ -49,6 +81,8 @@ fn default_config_contains_privacy_defaults() {
     assert!(config.show_clipboard_privacy_warning_on_first_use);
     assert!(config.disable_in_elevated_windows);
     assert!(config.manual_hotkey_always_enabled);
+    assert!(!config.start_minimized_to_tray);
+    assert_eq!(config.close_button_behavior, CloseButtonBehavior::Ask);
     assert!(config.is_disabled_process("Bitwarden.exe"));
     assert!(config.is_disabled_process("bitwarden.exe"));
 }
@@ -70,10 +104,16 @@ fn settings_schema_defaults_missing_fields_for_backward_compatibility() {
     )
     .expect("older settings schema should load with defaults");
 
+    assert_eq!(
+        config.providers[0].provider_kind,
+        AiProviderKind::OpenAiCompatible
+    );
     assert_eq!(config.providers[0].api_key, "");
     assert_eq!(config.providers[0].api_key_ref, "");
     assert!(config.providers[0].headers.is_empty());
     assert_eq!(config.hotkey, AppConfig::default().hotkey);
     assert!(config.clipboard_fallback_enabled);
     assert!(config.manual_hotkey_always_enabled);
+    assert!(!config.start_minimized_to_tray);
+    assert_eq!(config.close_button_behavior, CloseButtonBehavior::Ask);
 }

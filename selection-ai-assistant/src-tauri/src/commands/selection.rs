@@ -1,9 +1,9 @@
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::ai::action_classifier::{classify_action, AiAction};
 use crate::app_state::AppState;
 use crate::commands::panel::{hide_floating_button, show_ai_panel};
-use crate::selection::types::{SelectionCandidate, SelectionReadMethod};
+use crate::selection::types::{SelectionAnchorSource, SelectionCandidate, SelectionReadMethod};
 use crate::types::{Point, PublicError};
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
@@ -57,16 +57,37 @@ pub fn create_panel_context_for_text(text: &str) -> Result<PanelContext, PublicE
         anchor_rect: None,
         fallback_point: Point { x: 200.0, y: 200.0 },
         read_method: SelectionReadMethod::HotkeyClipboard,
+        selection_rects: Vec::new(),
+        explicit_anchor: None,
+        anchor_source: Some(SelectionAnchorSource::HotkeyCursorFallback),
     };
     create_panel_context_for_selection(selection, false)
 }
 
 pub fn emit_panel_context(app: &AppHandle, context: &PanelContext) -> Result<(), PublicError> {
+    app.state::<AppState>()
+        .store_latest_source_text(context.selection.text.clone());
+    app.emit(
+        "source_text_context",
+        crate::commands::panel::SourceTextContext {
+            text: context.selection.text.clone(),
+        },
+    )
+    .map_err(|err| PublicError {
+        code: "emit_failed".to_string(),
+        message: err.to_string(),
+    })?;
     app.emit("panel_context", context)
         .map_err(|err| PublicError {
             code: "emit_failed".to_string(),
             message: err.to_string(),
         })
+}
+
+pub fn panel_context_for_visible_refresh(context: &PanelContext) -> PanelContext {
+    let mut refreshed = context.clone();
+    refreshed.auto_run = false;
+    refreshed
 }
 
 pub fn open_panel_for_context(

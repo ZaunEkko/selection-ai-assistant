@@ -3,6 +3,7 @@ import {
   formatCommandError,
   getConfig,
   getLatestPanelContext,
+  getPlatformCapabilities,
   listProviderModels,
   openPanelFromFloatingButton,
   saveProviderConfig,
@@ -69,6 +70,7 @@ describe('Tauri API wrappers', () => {
       name: 'OpenAI',
       baseUrl: 'https://api.openai.com/v1',
       model: 'gpt-test',
+      providerKind: 'openAiCompatible',
       apiKey: 'dummy-api-key',
       apiKeyRef: 'credential://openai',
       headers: [],
@@ -88,17 +90,37 @@ describe('Tauri API wrappers', () => {
       name: 'OpenAI',
       baseUrl: 'https://api.openai.com/v1',
       model: '',
+      providerKind: 'openAiCompatible',
       apiKey: 'dummy-api-key',
       apiKeyRef: 'credential://openai',
       headers: [],
     };
-    invokeMock.mockResolvedValueOnce(['gpt-test']).mockResolvedValueOnce({ success: true, modelCount: 1 });
+    invokeMock.mockResolvedValueOnce(['gpt-test']).mockResolvedValueOnce({ success: true, modelCount: 1, modelListAvailable: true });
 
     await expect(listProviderModels(provider)).resolves.toEqual(['gpt-test']);
-    await expect(testProviderConnection(provider)).resolves.toEqual({ success: true, modelCount: 1 });
+    await expect(testProviderConnection(provider)).resolves.toEqual({ success: true, modelCount: 1, modelListAvailable: true });
 
     expect(invokeMock).toHaveBeenNthCalledWith(1, 'list_provider_models', { provider });
     expect(invokeMock).toHaveBeenNthCalledWith(2, 'test_provider_connection', { provider });
+  });
+
+  it('gets platform capabilities for platform-aware UI fallbacks', async () => {
+    const capabilities = {
+      platform: 'macos',
+      automaticSelection: 'permissionRequired',
+      globalInputMonitor: 'permissionRequired',
+      selectionReader: 'unavailable',
+      selectionAnchorReader: 'unavailable',
+      clipboardFallback: 'unavailable',
+      manualHotkey: 'unavailable',
+      permissionCheck: 'permissionRequired',
+      permissionNote: 'macOS backend 已预留',
+    } as const;
+    invokeMock.mockResolvedValueOnce(capabilities);
+
+    await expect(getPlatformCapabilities()).resolves.toEqual(capabilities);
+
+    expect(invokeMock).toHaveBeenCalledWith('get_platform_capabilities');
   });
 
   it('formats common command errors in Chinese while keeping safe details', () => {

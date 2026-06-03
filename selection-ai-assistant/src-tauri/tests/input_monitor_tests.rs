@@ -2,9 +2,10 @@ use selection_ai_assistant_lib::config::AppConfig;
 use selection_ai_assistant_lib::input_monitor::events::{
     apply_mouse_up_action_to_pending_selection, classify_mouse_up, consume_pending_selection,
     handle_hotkey_state, handle_mouse_button_event, hover_action_for_pending_selection,
-    hover_action_for_pending_selection_when_idle, is_drag_distance_met, HotkeyAction,
-    HotkeyKeyState, MouseButtonEvent, MouseUpAction, PendingHotkeyAction, PendingSelection,
-    PendingSelectionHoverAction, SelectionMouseUpEffect,
+    hover_action_for_pending_selection_when_idle, is_drag_distance_met,
+    visible_floating_button_action_when_idle, HotkeyAction, HotkeyKeyState, MouseButtonEvent,
+    MouseUpAction, PendingHotkeyAction, PendingSelection, PendingSelectionHoverAction,
+    SelectionMouseUpEffect, VisibleFloatingButton, VisibleFloatingButtonAction,
 };
 use selection_ai_assistant_lib::types::{Point, Rect};
 
@@ -224,7 +225,7 @@ fn mouse_move_during_active_drag_never_hover_triggers_pending_selection() {
 }
 
 #[test]
-fn mouse_move_after_drag_release_first_entering_hover_radius_does_not_show_button() {
+fn mouse_move_after_drag_release_first_entering_hover_radius_shows_button() {
     let mut pending_selection = Some(PendingSelection {
         anchor: Point { x: 100.0, y: 100.0 },
         hover_started_at_ms: None,
@@ -239,14 +240,9 @@ fn mouse_move_after_drag_release_first_entering_hover_radius_does_not_show_butto
             2_000,
             1_000,
         ),
-        PendingSelectionHoverAction::KeepPending
-    );
-    assert_eq!(
-        pending_selection,
-        Some(PendingSelection {
+        PendingSelectionHoverAction::CaptureAndShowButton {
             anchor: Point { x: 100.0, y: 100.0 },
-            hover_started_at_ms: Some(2_000),
-        })
+        }
     );
 }
 
@@ -451,10 +447,10 @@ fn pending_selection_waits_until_explicit_mouse_move_near_anchor() {
 }
 
 #[test]
-fn pending_selection_inside_hover_radius_before_delay_keeps_pending() {
+fn pending_selection_inside_hover_radius_shows_button_on_first_move() {
     let mut pending_selection = Some(PendingSelection {
         anchor: Point { x: 100.0, y: 100.0 },
-        hover_started_at_ms: Some(1_000),
+        hover_started_at_ms: None,
     });
 
     assert_eq!(
@@ -462,15 +458,17 @@ fn pending_selection_inside_hover_radius_before_delay_keeps_pending() {
             &mut pending_selection,
             Point { x: 130.0, y: 130.0 },
             90.0,
-            1_999,
+            1_000,
             1_000,
         ),
-        PendingSelectionHoverAction::KeepPending
+        PendingSelectionHoverAction::CaptureAndShowButton {
+            anchor: Point { x: 100.0, y: 100.0 },
+        }
     );
 }
 
 #[test]
-fn pending_selection_inside_hover_radius_after_delay_shows_button() {
+fn pending_selection_inside_hover_radius_still_shows_button_after_delay() {
     let mut pending_selection = Some(PendingSelection {
         anchor: Point { x: 100.0, y: 100.0 },
         hover_started_at_ms: Some(1_000),
@@ -523,7 +521,9 @@ fn pending_selection_leaving_hover_radius_resets_dwell() {
             2_001,
             1_000,
         ),
-        PendingSelectionHoverAction::KeepPending
+        PendingSelectionHoverAction::CaptureAndShowButton {
+            anchor: Point { x: 100.0, y: 100.0 },
+        }
     );
 }
 
@@ -540,6 +540,79 @@ fn no_pending_selection_means_mouse_move_does_not_show_button() {
             1_000,
         ),
         PendingSelectionHoverAction::NoPendingSelection
+    );
+}
+
+#[test]
+fn visible_floating_button_hides_after_mouse_leaves_hover_radius() {
+    let mut visible_button = Some(VisibleFloatingButton {
+        anchor: Point { x: 100.0, y: 100.0 },
+    });
+
+    assert_eq!(
+        visible_floating_button_action_when_idle(
+            &mut visible_button,
+            None,
+            Point { x: 250.0, y: 100.0 },
+            90.0,
+            &[],
+        ),
+        VisibleFloatingButtonAction::HideAndRearmSelection {
+            anchor: Point { x: 100.0, y: 100.0 },
+        }
+    );
+    assert_eq!(visible_button, None);
+}
+
+#[test]
+fn hidden_floating_button_can_show_again_after_mouse_returns_to_hover_radius() {
+    let mut pending_selection = Some(PendingSelection {
+        anchor: Point { x: 100.0, y: 100.0 },
+        hover_started_at_ms: None,
+    });
+
+    assert_eq!(
+        hover_action_for_pending_selection_when_idle(
+            &mut pending_selection,
+            None,
+            Point { x: 130.0, y: 130.0 },
+            90.0,
+            2_000,
+            1_000,
+        ),
+        PendingSelectionHoverAction::CaptureAndShowButton {
+            anchor: Point { x: 100.0, y: 100.0 },
+        }
+    );
+}
+
+#[test]
+fn visible_floating_button_stays_visible_when_mouse_is_on_assistant_ui() {
+    let mut visible_button = Some(VisibleFloatingButton {
+        anchor: Point { x: 100.0, y: 100.0 },
+    });
+    let assistant_windows = [Rect {
+        x: 112.0,
+        y: 112.0,
+        width: 40.0,
+        height: 40.0,
+    }];
+
+    assert_eq!(
+        visible_floating_button_action_when_idle(
+            &mut visible_button,
+            None,
+            Point { x: 130.0, y: 130.0 },
+            20.0,
+            &assistant_windows,
+        ),
+        VisibleFloatingButtonAction::KeepVisible
+    );
+    assert_eq!(
+        visible_button,
+        Some(VisibleFloatingButton {
+            anchor: Point { x: 100.0, y: 100.0 },
+        })
     );
 }
 

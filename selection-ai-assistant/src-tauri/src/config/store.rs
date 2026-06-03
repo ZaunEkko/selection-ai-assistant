@@ -6,6 +6,20 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AiProviderKind {
+    OpenAiCompatible,
+    Anthropic,
+    Gemini,
+}
+
+impl Default for AiProviderKind {
+    fn default() -> Self {
+        Self::OpenAiCompatible
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct AiProviderConfig {
@@ -13,6 +27,7 @@ pub struct AiProviderConfig {
     pub name: String,
     pub base_url: String,
     pub model: String,
+    pub provider_kind: AiProviderKind,
     pub api_key: String,
     pub api_key_ref: String,
     pub headers: Vec<(String, String)>,
@@ -25,11 +40,33 @@ impl Default for AiProviderConfig {
             name: String::new(),
             base_url: String::new(),
             model: String::new(),
+            provider_kind: AiProviderKind::OpenAiCompatible,
             api_key: String::new(),
             api_key_ref: String::new(),
             headers: Vec::new(),
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CloseButtonBehavior {
+    Ask,
+    MinimizeToTray,
+    ExitApp,
+}
+
+impl Default for CloseButtonBehavior {
+    fn default() -> Self {
+        Self::Ask
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppBehaviorConfig {
+    pub start_minimized_to_tray: bool,
+    pub close_button_behavior: CloseButtonBehavior,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -46,6 +83,8 @@ pub struct AppConfig {
     pub show_clipboard_privacy_warning_on_first_use: bool,
     pub disable_in_elevated_windows: bool,
     pub manual_hotkey_always_enabled: bool,
+    pub start_minimized_to_tray: bool,
+    pub close_button_behavior: CloseButtonBehavior,
     pub disabled_apps: Vec<String>,
 }
 
@@ -63,6 +102,8 @@ impl Default for AppConfig {
             show_clipboard_privacy_warning_on_first_use: true,
             disable_in_elevated_windows: true,
             manual_hotkey_always_enabled: true,
+            start_minimized_to_tray: false,
+            close_button_behavior: CloseButtonBehavior::Ask,
             disabled_apps: vec![
                 "1Password.exe".to_string(),
                 "KeePassXC.exe".to_string(),

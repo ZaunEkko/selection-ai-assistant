@@ -8,6 +8,7 @@ pub enum AiAction {
     Summarize,
     CodeExplain,
     ErrorExplain,
+    ExpandPrompt,
     MenuFallback,
 }
 

@@ -1,3 +1,5 @@
+use crate::selection::uia_reader::UiaSelectionResult;
+
 #[derive(Debug, Clone)]
 pub struct ClipboardFallbackContext {
     pub clipboard_fallback_enabled: bool,
@@ -6,6 +8,14 @@ pub struct ClipboardFallbackContext {
     pub is_password_control: bool,
     pub is_elevated_window: bool,
     pub disable_in_elevated_windows: bool,
+}
+
+pub fn should_block_clipboard_fallback_after_uia_result(
+    uia_result: Option<&UiaSelectionResult>,
+) -> bool {
+    uia_result
+        .map(|result| result.is_password_control)
+        .unwrap_or(false)
 }
 
 pub fn should_use_clipboard_fallback(context: &ClipboardFallbackContext) -> bool {

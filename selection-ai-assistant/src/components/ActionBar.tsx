@@ -10,7 +10,13 @@ export function ActionBar({ activeAction, onSelect }: Props) {
   return (
     <div className="action-bar" aria-label="AI 操作">
       {actionOptions.map(([action, label]) => (
-        <button key={action} type="button" aria-pressed={activeAction === action} onClick={() => onSelect(action)}>
+        <button
+          key={action}
+          type="button"
+          className="action-switch-button"
+          aria-pressed={activeAction === action}
+          onClick={() => onSelect(action)}
+        >
           {label}
         </button>
       ))}

@@ -1,8 +1,12 @@
-use selection_ai_assistant_lib::selection::clipboard_reader::{
-    clipboard_restore_attempt_sequence, empty_clipboard_outcome,
-    should_accept_selected_text_after_restore, should_prepare_conservative_clipboard_capture,
-    should_use_clipboard_fallback, ClipboardFallbackContext, ClipboardFormatSnapshot,
-    ClipboardRestorePlan,
+use selection_ai_assistant_lib::selection::{
+    clipboard_reader::{
+        clipboard_restore_attempt_sequence, empty_clipboard_outcome,
+        should_accept_selected_text_after_restore,
+        should_block_clipboard_fallback_after_uia_result,
+        should_prepare_conservative_clipboard_capture, should_use_clipboard_fallback,
+        ClipboardFallbackContext, ClipboardFormatSnapshot, ClipboardRestorePlan,
+    },
+    uia_reader::{SelectionConfidence, UiaSelectionResult},
 };
 
 #[test]
@@ -45,6 +49,28 @@ fn allows_clipboard_for_normal_window() {
     };
 
     assert!(should_use_clipboard_fallback(&context));
+}
+
+#[test]
+fn blocks_clipboard_fallback_after_uia_password_result() {
+    let uia_password_result = UiaSelectionResult {
+        text: None,
+        rects: Vec::new(),
+        is_password_control: true,
+        confidence: SelectionConfidence::Low,
+    };
+    let context = ClipboardFallbackContext {
+        clipboard_fallback_enabled: true,
+        process_name: "chrome.exe".to_string(),
+        disabled_apps: Vec::new(),
+        is_password_control: should_block_clipboard_fallback_after_uia_result(Some(
+            &uia_password_result,
+        )),
+        is_elevated_window: false,
+        disable_in_elevated_windows: true,
+    };
+
+    assert!(!should_use_clipboard_fallback(&context));
 }
 
 #[test]

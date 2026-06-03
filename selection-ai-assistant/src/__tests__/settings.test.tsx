@@ -3,17 +3,49 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { Settings } from '../windows/Settings';
 import type { AppConfig } from '../api/tauri';
 
-const { getConfigMock, saveProviderConfigMock, listProviderModelsMock, testProviderConnectionMock } = vi.hoisted(() => ({
+type Listener<T = unknown> = (event: { payload: T }) => void;
+
+const {
+  listeners,
+  getConfigMock,
+  saveProviderConfigMock,
+  saveAppBehaviorConfigMock,
+  confirmMainWindowCloseMock,
+  getPlatformCapabilitiesMock,
+  listProviderModelsMock,
+  testProviderConnectionMock,
+} = vi.hoisted(() => ({
+  listeners: new Map<string, Listener[]>(),
   getConfigMock: vi.fn(),
   saveProviderConfigMock: vi.fn(),
+  saveAppBehaviorConfigMock: vi.fn(),
+  confirmMainWindowCloseMock: vi.fn(),
+  getPlatformCapabilitiesMock: vi.fn(),
   listProviderModelsMock: vi.fn(),
   testProviderConnectionMock: vi.fn(),
+}));
+
+vi.mock('@tauri-apps/api/event', () => ({
+  listen: (eventName: string, callback: Listener) => {
+    const existing = listeners.get(eventName) ?? [];
+    existing.push(callback);
+    listeners.set(eventName, existing);
+    return Promise.resolve(() => {
+      listeners.set(
+        eventName,
+        (listeners.get(eventName) ?? []).filter((item) => item !== callback),
+      );
+    });
+  },
 }));
 
 vi.mock('../api/tauri', async () => {
   return {
     getConfig: getConfigMock,
     saveProviderConfig: saveProviderConfigMock,
+    saveAppBehaviorConfig: saveAppBehaviorConfigMock,
+    confirmMainWindowClose: confirmMainWindowCloseMock,
+    getPlatformCapabilities: getPlatformCapabilitiesMock,
     listProviderModels: listProviderModelsMock,
     testProviderConnection: testProviderConnectionMock,
     formatCommandError: (err: unknown) => {
@@ -35,6 +67,7 @@ const config: AppConfig = {
       name: 'OpenRouter',
       baseUrl: 'https://openrouter.ai/api/v1',
       model: 'anthropic/claude-sonnet-4.5',
+      providerKind: 'openAiCompatible',
       apiKey: 'dummy-api-key',
       apiKeyRef: 'credential://openrouter',
       headers: [],
@@ -49,6 +82,8 @@ const config: AppConfig = {
   showClipboardPrivacyWarningOnFirstUse: true,
   disableInElevatedWindows: true,
   manualHotkeyAlwaysEnabled: true,
+  startMinimizedToTray: false,
+  closeButtonBehavior: 'ask',
   disabledApps: ['1Password.exe', 'KeePassXC.exe', 'Bitwarden.exe', 'mstsc.exe', 'AnyDesk.exe', 'TeamViewer.exe'],
 };
 
@@ -62,16 +97,39 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
+function emit<T>(eventName: string, payload: T) {
+  for (const listener of listeners.get(eventName) ?? []) {
+    listener({ payload });
+  }
+}
+
 describe('Settings', () => {
   beforeEach(() => {
     getConfigMock.mockReset();
     saveProviderConfigMock.mockReset();
+    saveAppBehaviorConfigMock.mockReset();
+    confirmMainWindowCloseMock.mockReset();
+    getPlatformCapabilitiesMock.mockReset();
     listProviderModelsMock.mockReset();
     testProviderConnectionMock.mockReset();
+    listeners.clear();
     getConfigMock.mockResolvedValue(config);
     saveProviderConfigMock.mockResolvedValue(config);
+    saveAppBehaviorConfigMock.mockResolvedValue(config);
+    confirmMainWindowCloseMock.mockResolvedValue(config);
+    getPlatformCapabilitiesMock.mockResolvedValue({
+      platform: 'windows',
+      automaticSelection: 'supported',
+      globalInputMonitor: 'supported',
+      selectionReader: 'supported',
+      selectionAnchorReader: 'supported',
+      clipboardFallback: 'supported',
+      manualHotkey: 'supported',
+      permissionCheck: 'supported',
+      permissionNote: null,
+    });
     listProviderModelsMock.mockResolvedValue(['openai/gpt-4.1', 'openai/gpt-4.1-mini']);
-    testProviderConnectionMock.mockResolvedValue({ success: true, modelCount: 2 });
+    testProviderConnectionMock.mockResolvedValue({ success: true, modelCount: 2, modelListAvailable: true });
   });
 
   it('shows Chinese provider form, current providers, clipboard warning, and disabled apps', async () => {
@@ -87,6 +145,70 @@ describe('Settings', () => {
     }
   });
 
+  it('shows platform fallback guidance when automatic selection is not available', async () => {
+    getPlatformCapabilitiesMock.mockResolvedValueOnce({
+      platform: 'linux',
+      automaticSelection: 'unavailable',
+      globalInputMonitor: 'unsupported',
+      selectionReader: 'unavailable',
+      selectionAnchorReader: 'unavailable',
+      clipboardFallback: 'unavailable',
+      manualHotkey: 'unavailable',
+      permissionCheck: 'unavailable',
+      permissionNote: 'Linux backend 已预留；Wayland 默认限制更强。',
+    });
+
+    render(<Settings />);
+
+    expect(await screen.findByText(/当前平台：Linux/)).toBeInTheDocument();
+    expect(screen.getByText(/当前平台暂未支持自动划词/)).toBeInTheDocument();
+    expect(screen.getByText(/快捷键或手动输入/)).toBeInTheDocument();
+    expect(screen.getByText(/Wayland 默认限制更强/)).toBeInTheDocument();
+  });
+
+  it('saves startup and close button behavior preferences', async () => {
+    const nextConfig: AppConfig = {
+      ...config,
+      startMinimizedToTray: true,
+      closeButtonBehavior: 'exitApp',
+    };
+    saveAppBehaviorConfigMock.mockResolvedValue(nextConfig);
+    render(<Settings />);
+    await screen.findByRole('heading', { name: '设置' });
+
+    fireEvent.click(screen.getByLabelText('启动时最小化到后台'));
+    fireEvent.change(screen.getByLabelText('关闭按钮行为'), { target: { value: 'exitApp' } });
+    fireEvent.click(screen.getByRole('button', { name: '保存启动与关闭设置' }));
+
+    expect(screen.getByRole('button', { name: '正在保存设置…' })).toBeDisabled();
+    expect(screen.getByRole('status')).toHaveTextContent('正在保存启动与关闭设置…');
+
+    await waitFor(() => {
+      expect(saveAppBehaviorConfigMock).toHaveBeenCalledWith({
+        startMinimizedToTray: true,
+        closeButtonBehavior: 'exitApp',
+      });
+    });
+    expect(screen.getByLabelText('启动时最小化到后台')).toBeChecked();
+    expect(screen.getByLabelText('关闭按钮行为')).toHaveValue('exitApp');
+    expect(screen.getByRole('status')).toHaveTextContent('已保存启动与关闭设置。');
+  });
+
+  it('prompts on the first main window close request and remembers the selected close behavior', async () => {
+    render(<Settings />);
+    await screen.findByRole('heading', { name: '设置' });
+
+    await act(async () => {
+      emit('main_close_confirmation_requested', null);
+    });
+
+    expect(screen.getByRole('dialog', { name: '关闭 Selection AI Assistant？' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '最小化到后台并记住' }));
+
+    await waitFor(() => expect(confirmMainWindowCloseMock).toHaveBeenCalledWith('minimizeToTray'));
+    expect(screen.queryByRole('dialog', { name: '关闭 Selection AI Assistant？' })).not.toBeInTheDocument();
+  });
+
   it('edits the default provider when it is not the first configured provider', async () => {
     getConfigMock.mockResolvedValue({
       ...config,
@@ -97,6 +219,7 @@ describe('Settings', () => {
           name: 'OpenAI',
           baseUrl: 'https://api.openai.com/v1',
           model: 'gpt-4.1-mini',
+          providerKind: 'openAiCompatible',
           apiKey: 'openai-key',
           apiKeyRef: 'credential://openai',
           headers: [],
@@ -113,6 +236,43 @@ describe('Settings', () => {
     await waitFor(() => expect(screen.getByLabelText('模型')).toHaveValue('anthropic/claude-sonnet-4.5'));
     expect(screen.getByLabelText('服务商 ID')).toHaveValue('openrouter');
     expect(screen.getByLabelText('名称')).toHaveValue('OpenRouter');
+  });
+
+  it('applies official provider presets with protocol specific defaults', async () => {
+    render(<Settings />);
+    await screen.findByRole('heading', { name: '设置' });
+
+    fireEvent.change(screen.getByLabelText('厂商预设'), { target: { value: 'anthropic' } });
+
+    expect(screen.getByLabelText('服务商 ID')).toHaveValue('anthropic');
+    expect(screen.getByLabelText('名称')).toHaveValue('Claude');
+    expect(screen.getByLabelText('接口地址')).toHaveValue('https://api.anthropic.com/v1');
+    expect(screen.getByLabelText('协议类型')).toHaveValue('anthropic');
+    expect(screen.getByLabelText('模型')).toHaveValue('claude-sonnet-4-6');
+  });
+
+  it('includes required domestic and platform provider presets', async () => {
+    render(<Settings />);
+    await screen.findByRole('heading', { name: '设置' });
+
+    const presetSelect = screen.getByLabelText('厂商预设');
+    for (const name of [
+      'OpenAI',
+      'Claude',
+      'Gemini',
+      '智谱 Zhipu',
+      'DeepSeek',
+      '阿里百炼 Bailian',
+      'Kimi',
+      'Minimax',
+      'SiliconFlow',
+      'AWS Bedrock',
+      '火山方舟',
+      'AgentPlan',
+      'OpenCode',
+    ]) {
+      expect(within(presetSelect).getByRole('option', { name })).toBeInTheDocument();
+    }
   });
 
   it('saves provider config including API key and refreshes displayed provider list', async () => {
@@ -167,12 +327,16 @@ describe('Settings', () => {
     expect(screen.getByRole('status')).toHaveTextContent('已加载 2 个模型。');
     expect(modelInput).toHaveValue('openai/gpt-4.1');
 
-    const loadedModelSelect = screen.getByRole('combobox', { name: '已加载模型' });
-    expect(within(loadedModelSelect).getByRole('option', { name: 'openai/gpt-4.1' })).toBeInTheDocument();
-    expect(within(loadedModelSelect).getByRole('option', { name: 'openai/gpt-4.1-mini' })).toBeInTheDocument();
+    expect(screen.queryByRole('combobox', { name: '已加载模型' })).not.toBeInTheDocument();
 
-    fireEvent.change(loadedModelSelect, { target: { value: 'openai/gpt-4.1-mini' } });
+    fireEvent.click(screen.getByRole('button', { name: '展开模型列表' }));
+    const modelList = screen.getByRole('listbox', { name: '已加载模型' });
+    expect(within(modelList).getByRole('option', { name: 'openai/gpt-4.1' })).toBeInTheDocument();
+    expect(within(modelList).getByRole('option', { name: 'openai/gpt-4.1-mini' })).toBeInTheDocument();
+
+    fireEvent.click(within(modelList).getByRole('option', { name: 'openai/gpt-4.1-mini' }));
     expect(modelInput).toHaveValue('openai/gpt-4.1-mini');
+    expect(screen.queryByRole('listbox', { name: '已加载模型' })).not.toBeInTheDocument();
   });
 
   it('shows a visible error when loading provider models fails', async () => {
@@ -187,7 +351,7 @@ describe('Settings', () => {
   });
 
   it('tests provider connection with visible progress and shows model count', async () => {
-    const connectionRequest = deferred<{ success: boolean; modelCount: number }>();
+    const connectionRequest = deferred<{ success: boolean; modelCount: number; modelListAvailable: boolean }>();
     testProviderConnectionMock.mockReturnValueOnce(connectionRequest.promise);
     render(<Settings />);
     await screen.findByRole('heading', { name: '设置' });
@@ -198,13 +362,26 @@ describe('Settings', () => {
     expect(screen.getByRole('status')).toHaveTextContent('正在测试服务商连接…');
 
     await act(async () => {
-      connectionRequest.resolve({ success: true, modelCount: 2 });
+      connectionRequest.resolve({ success: true, modelCount: 2, modelListAvailable: true });
     });
 
     await waitFor(() => {
       expect(testProviderConnectionMock).toHaveBeenCalledWith(expect.objectContaining({ baseUrl: 'https://openrouter.ai/api/v1' }));
     });
     expect(screen.getByRole('status')).toHaveTextContent('连接成功，可用模型 2 个。');
+  });
+
+  it('shows chat probe success when the provider does not expose a model list endpoint', async () => {
+    testProviderConnectionMock.mockResolvedValueOnce({ success: true, modelCount: 0, modelListAvailable: false });
+    render(<Settings />);
+    await screen.findByRole('heading', { name: '设置' });
+
+    fireEvent.click(screen.getByRole('button', { name: '测试连接' }));
+
+    await waitFor(() => {
+      expect(testProviderConnectionMock).toHaveBeenCalledWith(expect.objectContaining({ model: 'anthropic/claude-sonnet-4.5' }));
+    });
+    expect(screen.getByRole('status')).toHaveTextContent('连接成功，模型列表不可用，已使用当前模型完成兼容性测试。');
   });
 
   it('shows a visible error when provider connection test fails', async () => {

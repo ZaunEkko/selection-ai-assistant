@@ -6,6 +6,7 @@ pub struct AppState {
     pub config: Mutex<AppConfig>,
     pub settings_path: Option<PathBuf>,
     pub latest_selection: Mutex<Option<PanelContext>>,
+    latest_source_text: Mutex<Option<String>>,
 }
 
 impl AppState {
@@ -14,6 +15,7 @@ impl AppState {
             config: Mutex::new(config),
             settings_path: None,
             latest_selection: Mutex::new(None),
+            latest_source_text: Mutex::new(None),
         }
     }
 
@@ -22,6 +24,7 @@ impl AppState {
             config: Mutex::new(config),
             settings_path: Some(settings_path),
             latest_selection: Mutex::new(None),
+            latest_source_text: Mutex::new(None),
         }
     }
 
@@ -42,10 +45,12 @@ impl AppState {
     }
 
     pub fn store_latest_selection(&self, context: PanelContext) {
+        let source_text = context.selection.text.clone();
         *self
             .latest_selection
             .lock()
             .expect("latest selection mutex poisoned") = Some(context);
+        self.store_latest_source_text(source_text);
     }
 
     pub fn latest_selection(&self) -> Option<PanelContext> {
@@ -60,5 +65,19 @@ impl AppState {
             .latest_selection
             .lock()
             .expect("latest selection mutex poisoned") = None;
+    }
+
+    pub fn store_latest_source_text(&self, text: String) {
+        *self
+            .latest_source_text
+            .lock()
+            .expect("latest source text mutex poisoned") = Some(text);
+    }
+
+    pub fn latest_source_text(&self) -> Option<String> {
+        self.latest_source_text
+            .lock()
+            .expect("latest source text mutex poisoned")
+            .clone()
     }
 }

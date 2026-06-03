@@ -1,8 +1,10 @@
 use selection_ai_assistant_lib::app_state::AppState;
 use selection_ai_assistant_lib::commands::config::{
-    get_config_from_state, save_provider_config_in_state,
+    get_config_from_state, save_app_behavior_config_in_state, save_provider_config_in_state,
 };
-use selection_ai_assistant_lib::config::{AiProviderConfig, AppConfig};
+use selection_ai_assistant_lib::config::{
+    AiProviderConfig, AiProviderKind, AppBehaviorConfig, AppConfig, CloseButtonBehavior,
+};
 
 fn provider(id: &str, base_url: &str, model: &str) -> AiProviderConfig {
     AiProviderConfig {
@@ -10,10 +12,55 @@ fn provider(id: &str, base_url: &str, model: &str) -> AiProviderConfig {
         name: "Test Provider".to_string(),
         base_url: base_url.to_string(),
         model: model.to_string(),
+        provider_kind: AiProviderKind::OpenAiCompatible,
         api_key: "test-api-key".to_string(),
         api_key_ref: format!("credential://{id}"),
         headers: Vec::new(),
     }
+}
+
+#[test]
+fn save_app_behavior_config_updates_startup_and_close_preferences() {
+    let state = AppState::new(AppConfig::default());
+
+    let config = save_app_behavior_config_in_state(
+        &state,
+        AppBehaviorConfig {
+            start_minimized_to_tray: true,
+            close_button_behavior: CloseButtonBehavior::ExitApp,
+        },
+    )
+    .expect("app behavior config should save");
+
+    assert!(config.start_minimized_to_tray);
+    assert_eq!(config.close_button_behavior, CloseButtonBehavior::ExitApp);
+
+    let stored = get_config_from_state(&state).expect("config should be readable");
+    assert!(stored.start_minimized_to_tray);
+    assert_eq!(stored.close_button_behavior, CloseButtonBehavior::ExitApp);
+}
+
+#[test]
+fn save_app_behavior_config_persists_to_settings_file() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let path = dir.path().join("settings.json");
+    let state = AppState::new_with_settings_path(AppConfig::default(), path.clone());
+
+    save_app_behavior_config_in_state(
+        &state,
+        AppBehaviorConfig {
+            start_minimized_to_tray: true,
+            close_button_behavior: CloseButtonBehavior::MinimizeToTray,
+        },
+    )
+    .expect("app behavior config should save");
+
+    let loaded = AppConfig::load_from_path(&path).expect("settings should load from disk");
+    assert!(loaded.start_minimized_to_tray);
+    assert_eq!(
+        loaded.close_button_behavior,
+        CloseButtonBehavior::MinimizeToTray
+    );
 }
 
 #[test]
