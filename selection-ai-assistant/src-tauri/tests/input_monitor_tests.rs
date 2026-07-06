@@ -568,7 +568,9 @@ fn no_pending_selection_means_mouse_move_does_not_show_button() {
 #[test]
 fn visible_floating_button_stays_visible_after_mouse_leaves_hover_radius() {
     let mut visible_button = Some(VisibleFloatingButton {
-        anchor: Point { x: 100.0, y: 100.0 },
+        window_position: Point { x: 100.0, y: 100.0 },
+        selection_anchor: Point { x: 100.0, y: 100.0 },
+        selection_rect: None,
     });
 
     assert_eq!(
@@ -584,7 +586,9 @@ fn visible_floating_button_stays_visible_after_mouse_leaves_hover_radius() {
     assert_eq!(
         visible_button,
         Some(VisibleFloatingButton {
-            anchor: Point { x: 100.0, y: 100.0 },
+            window_position: Point { x: 100.0, y: 100.0 },
+            selection_anchor: Point { x: 100.0, y: 100.0 },
+            selection_rect: None,
         })
     );
 }
@@ -615,7 +619,9 @@ fn hidden_floating_button_can_show_again_after_mouse_returns_to_hover_radius() {
 #[test]
 fn visible_floating_button_stays_visible_when_mouse_is_on_assistant_ui() {
     let mut visible_button = Some(VisibleFloatingButton {
-        anchor: Point { x: 100.0, y: 100.0 },
+        window_position: Point { x: 100.0, y: 100.0 },
+        selection_anchor: Point { x: 100.0, y: 100.0 },
+        selection_rect: None,
     });
     let assistant_windows = [Rect {
         x: 112.0,
@@ -637,7 +643,9 @@ fn visible_floating_button_stays_visible_when_mouse_is_on_assistant_ui() {
     assert_eq!(
         visible_button,
         Some(VisibleFloatingButton {
-            anchor: Point { x: 100.0, y: 100.0 },
+            window_position: Point { x: 100.0, y: 100.0 },
+            selection_anchor: Point { x: 100.0, y: 100.0 },
+            selection_rect: None,
         })
     );
 }

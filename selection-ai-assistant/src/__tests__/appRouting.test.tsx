@@ -11,28 +11,38 @@ const {
   openPanelFromFloatingButtonMock,
   runAiActionMock,
   showTranslateResultMock,
+  hideTranslateResultMock,
   hideFloatingButtonMock,
   replaceSelectedTextMock,
   hideSourceTextWindowMock,
   getLatestPanelContextMock,
   getLatestSourceTextContextMock,
+  currentWindowHideMock,
+  currentWindowStartDraggingMock,
+  currentWindowStartResizeDraggingMock,
 } = vi.hoisted(() => ({
   listeners: new Map<string, Listener[]>(),
   focusListeners: [] as Listener<boolean>[],
   openPanelFromFloatingButtonMock: vi.fn(),
   runAiActionMock: vi.fn(),
   showTranslateResultMock: vi.fn(),
+  hideTranslateResultMock: vi.fn(),
   hideFloatingButtonMock: vi.fn(),
   replaceSelectedTextMock: vi.fn(),
   hideSourceTextWindowMock: vi.fn(),
   getLatestPanelContextMock: vi.fn(),
   getLatestSourceTextContextMock: vi.fn(),
+  currentWindowHideMock: vi.fn(),
+  currentWindowStartDraggingMock: vi.fn(),
+  currentWindowStartResizeDraggingMock: vi.fn(),
 }));
 
 vi.mock('@tauri-apps/api/window', () => ({
   getCurrentWindow: () => ({
     label: currentLabel,
-    startDragging: vi.fn(),
+    startDragging: currentWindowStartDraggingMock,
+    startResizeDragging: currentWindowStartResizeDraggingMock,
+    hide: currentWindowHideMock,
     onFocusChanged: (callback: Listener<boolean>) => {
       focusListeners.push(callback);
       return Promise.resolve(() => {
@@ -95,12 +105,15 @@ vi.mock('../api/tauri', () => ({
   showSourceTextWindow: vi.fn(),
   startDragAiPanel: vi.fn(),
   startDragSourceTextWindow: vi.fn(),
+  startDragTranslateResultWindow: currentWindowStartDraggingMock,
+  startResizeTranslateResultWindow: currentWindowStartResizeDraggingMock,
   runAiAction: runAiActionMock,
   runAiFollowUp: vi.fn(),
   getLatestPanelContext: getLatestPanelContextMock,
   getLatestSourceTextContext: getLatestSourceTextContextMock,
   openPanelFromFloatingButton: openPanelFromFloatingButtonMock,
   showTranslateResult: showTranslateResultMock,
+  hideTranslateResult: hideTranslateResultMock,
   hideFloatingButton: hideFloatingButtonMock,
   replaceSelectedText: replaceSelectedTextMock,
   formatCommandError: (err: unknown) => (err instanceof Error ? err.message : String(err)),
@@ -129,10 +142,15 @@ describe('App routing by Tauri window label', () => {
     replaceSelectedTextMock.mockReset();
     openPanelFromFloatingButtonMock.mockReset();
     hideSourceTextWindowMock.mockReset();
+    hideTranslateResultMock.mockReset();
     getLatestPanelContextMock.mockReset();
     getLatestSourceTextContextMock.mockReset();
+    currentWindowHideMock.mockReset();
+    currentWindowStartDraggingMock.mockReset();
+    currentWindowStartResizeDraggingMock.mockReset();
     runAiActionMock.mockResolvedValue({ requestId: 'request-1' });
     showTranslateResultMock.mockResolvedValue(undefined);
+    hideTranslateResultMock.mockResolvedValue(undefined);
     hideFloatingButtonMock.mockResolvedValue(undefined);
     replaceSelectedTextMock.mockResolvedValue(undefined);
     openPanelFromFloatingButtonMock.mockResolvedValue(undefined);
@@ -201,7 +219,90 @@ describe('App routing by Tauri window label', () => {
     fireEvent.click(screen.getByRole('button', { name: '翻译文本' }));
 
     await waitFor(() =>
-      expect(showTranslateResultMock).toHaveBeenCalledWith({ x: 320, y: 240 }, 'hello world', '你好世界'),
+      expect(showTranslateResultMock).toHaveBeenNthCalledWith(1, { x: 320, y: 240 }, 'hello world', '', []),
+    );
+    await waitFor(() =>
+      expect(showTranslateResultMock).toHaveBeenLastCalledWith({ x: 320, y: 240 }, 'hello world', '你好世界', []),
+    );
+    expect(runAiActionMock).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'translateOnly', text: 'hello world', requestId: expect.stringMatching(/^translate-/) }),
+    );
+  });
+
+  it('opens translate result immediately while the translation stream is still pending', async () => {
+    currentLabel = 'floating-button';
+    getLatestPanelContextMock.mockResolvedValue({
+      selection: {
+        text: 'hello world',
+        sourceApp: 'manual',
+        windowTitle: 'Manual hotkey',
+        fallbackPoint: { x: 320, y: 240 },
+      },
+      action: 'translateExplain',
+    });
+    runAiActionMock.mockResolvedValue({ requestId: 'pending-request' });
+
+    render(<App />);
+    fireEvent.click(screen.getByRole('button', { name: '翻译文本' }));
+
+    await waitFor(() =>
+      expect(showTranslateResultMock).toHaveBeenCalledWith({ x: 320, y: 240 }, 'hello world', '', []),
+    );
+    expect(screen.getByRole('button', { name: '翻译文本' })).toHaveTextContent('翻译中…');
+  });
+
+  it('passes selection geometry to translate result placement', async () => {
+    currentLabel = 'floating-button';
+    getLatestPanelContextMock.mockResolvedValue({
+      selection: {
+        text: 'hello world',
+        sourceApp: 'manual',
+        windowTitle: 'Manual hotkey',
+        selectionRects: [{ x: 100, y: 80, width: 160, height: 22 }],
+        fallbackPoint: { x: 320, y: 240 },
+      },
+      action: 'translateExplain',
+    });
+    runAiActionMock.mockResolvedValue({ requestId: 'pending-request' });
+
+    render(<App />);
+    fireEvent.click(screen.getByRole('button', { name: '翻译文本' }));
+
+    await waitFor(() =>
+      expect(showTranslateResultMock).toHaveBeenCalledWith(
+        { x: 100, y: 80 },
+        'hello world',
+        '',
+        [{ x: 100, y: 80, width: 160, height: 22 }],
+      ),
+    );
+  });
+
+  it('ignores text-space selection geometry when opening translate result', async () => {
+    currentLabel = 'floating-button';
+    getLatestPanelContextMock.mockResolvedValue({
+      selection: {
+        text: 'hello world',
+        sourceApp: 'manual',
+        windowTitle: 'Manual hotkey',
+        selectionRects: [{ x: 0, y: 60, width: 1800, height: 120 }],
+        explicitAnchor: { x: 900, y: 120 },
+        fallbackPoint: { x: 420, y: 88 },
+      },
+      action: 'translateExplain',
+    });
+    runAiActionMock.mockResolvedValue({ requestId: 'pending-request' });
+
+    render(<App />);
+    fireEvent.click(screen.getByRole('button', { name: '翻译文本' }));
+
+    await waitFor(() =>
+      expect(showTranslateResultMock).toHaveBeenCalledWith(
+        { x: 420, y: 88 },
+        'hello world',
+        '',
+        [],
+      ),
     );
   });
 
@@ -257,7 +358,7 @@ describe('App routing by Tauri window label', () => {
     await waitFor(() => expect(replaceSelectedTextMock).not.toHaveBeenCalled());
   });
 
-  it('renders translate comparison window and displays pushed original and translated text', async () => {
+  it('renders translate result window as a movable single-column translation popup', async () => {
     currentLabel = 'translate-result';
 
     render(<App />);
@@ -267,11 +368,18 @@ describe('App routing by Tauri window label', () => {
       emit('translate_result', { originalText: 'hello world', translatedText: '你好世界' });
     });
 
-    expect(screen.getByText('翻译对照')).toBeInTheDocument();
-    expect(screen.getByText('原文')).toBeInTheDocument();
-    expect(screen.getByText('hello world')).toBeInTheDocument();
+    const header = screen.getByTitle('拖拽移动翻译浮窗');
+    fireEvent.mouseDown(header);
+    fireEvent.mouseDown(screen.getByRole('button', { name: '调整翻译浮窗大小' }));
+    fireEvent.click(screen.getByRole('button', { name: '关闭翻译浮窗' }));
+
     expect(screen.getByText('译文')).toBeInTheDocument();
-    expect(screen.getByText('你好世界')).toBeInTheDocument();
+    expect(screen.getByLabelText('译文内容')).toHaveTextContent('你好世界');
+    expect(screen.queryByText('原文')).not.toBeInTheDocument();
+    expect(screen.queryByText('hello world')).not.toBeInTheDocument();
+    expect(currentWindowStartDraggingMock).toHaveBeenCalledTimes(1);
+    expect(currentWindowStartResizeDraggingMock).toHaveBeenCalledWith('SouthEast');
+    expect(hideTranslateResultMock).toHaveBeenCalledTimes(1);
   });
 
   it('renders AI panel for the ai-panel window', () => {

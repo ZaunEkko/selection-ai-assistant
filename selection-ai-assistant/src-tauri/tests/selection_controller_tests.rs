@@ -82,6 +82,21 @@ fn creates_clipboard_candidate_with_generated_id() {
 }
 
 #[test]
+fn clipboard_candidate_toolbar_anchor_estimates_text_top_near_drag_line() {
+    let candidate = SelectionCandidate::from_clipboard_text(
+        "selected text".to_string(),
+        "chrome.exe".to_string(),
+        "Browser".to_string(),
+        Point { x: 80.0, y: 185.0 },
+    );
+
+    assert_eq!(
+        candidate.toolbar_anchor_point(),
+        Point { x: 80.0, y: 167.0 }
+    );
+}
+
+#[test]
 fn candidate_anchor_point_prefers_selection_rects_over_fallback_point() {
     let candidate = SelectionCandidate {
         id: "sel-real-anchor".to_string(),
@@ -158,7 +173,10 @@ fn candidate_toolbar_anchor_point_estimates_text_start_when_uia_rect_is_text_spa
         fallback_point: Point { x: 900.0, y: 100.0 },
     };
 
-    assert_eq!(candidate.toolbar_anchor_point(), Point { x: 0.0, y: 88.0 });
+    assert_eq!(
+        candidate.toolbar_anchor_point(),
+        Point { x: 900.0, y: 82.0 }
+    );
 }
 
 #[test]
@@ -183,6 +201,6 @@ fn candidate_toolbar_anchor_point_estimates_text_top_when_uia_rect_is_text_space
 
     assert_eq!(
         candidate.toolbar_anchor_point(),
-        Point { x: 100.0, y: 138.0 }
+        Point { x: 360.0, y: 132.0 }
     );
 }

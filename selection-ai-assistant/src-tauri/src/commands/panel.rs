@@ -3,14 +3,15 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use crate::app_state::AppState;
 
 use crate::floating_window::positioning::{
-    place_near_anchor, place_source_left_of_panel, place_toolbar_above_anchor, ScreenBounds,
-    WindowSize,
+    place_near_anchor, place_source_left_of_panel, place_toolbar_above_anchor,
+    place_toolbar_near_selection, place_translate_result_near_anchor,
+    place_translate_result_near_selection, ScreenBounds, WindowSize,
 };
 use crate::types::{Point, PublicError, Rect};
 
 const FLOATING_BUTTON_SIZE: WindowSize = WindowSize {
-    width: 300.0,
-    height: 52.0,
+    width: 244.0,
+    height: 44.0,
 };
 const AI_PANEL_FALLBACK_SIZE: WindowSize = WindowSize {
     width: 420.0,
@@ -21,8 +22,8 @@ const SOURCE_TEXT_FALLBACK_SIZE: WindowSize = WindowSize {
     height: 620.0,
 };
 const TRANSLATE_RESULT_SIZE: WindowSize = WindowSize {
-    width: 420.0,
-    height: 280.0,
+    width: 320.0,
+    height: 180.0,
 };
 const SOURCE_TEXT_WINDOW_GAP: f64 = 12.0;
 
@@ -55,6 +56,21 @@ fn position_toolbar_above_anchor(
 ) -> Result<Point, PublicError> {
     let screen = screen_bounds_for_anchor(app, anchor)?;
     Ok(place_toolbar_above_anchor(anchor, size, screen))
+}
+
+fn position_toolbar_near_selection(
+    app: &AppHandle,
+    anchor: Point,
+    selection_rects: &[Rect],
+    size: WindowSize,
+) -> Result<Point, PublicError> {
+    let screen = screen_bounds_for_anchor(app, anchor)?;
+    Ok(place_toolbar_near_selection(
+        anchor,
+        selection_rects,
+        size,
+        screen,
+    ))
 }
 
 fn screen_bounds_for_anchor(app: &AppHandle, anchor: Point) -> Result<ScreenBounds, PublicError> {
@@ -165,6 +181,14 @@ fn assistant_window_rects(app: &AppHandle) -> Vec<Rect> {
 
 #[tauri::command]
 pub fn show_floating_button(app: AppHandle, position: Point) -> Result<(), PublicError> {
+    show_floating_button_for_selection(app, position, &[])
+}
+
+pub fn show_floating_button_for_selection(
+    app: AppHandle,
+    position: Point,
+    selection_rects: &[Rect],
+) -> Result<(), PublicError> {
     let window = app
         .get_webview_window("floating-button")
         .ok_or_else(|| PublicError {
@@ -172,8 +196,41 @@ pub fn show_floating_button(app: AppHandle, position: Point) -> Result<(), Publi
             message: "Floating button window is not configured.".to_string(),
         })?;
 
-    let position = position_toolbar_above_anchor(&app, position, FLOATING_BUTTON_SIZE)?;
-    set_window_position(&window, position)?;
+    let position = floating_button_position_for_selection(&app, position, selection_rects)?;
+    show_floating_button_window(&window, position)
+}
+
+pub fn floating_button_position_for_selection(
+    app: &AppHandle,
+    position: Point,
+    selection_rects: &[Rect],
+) -> Result<Point, PublicError> {
+    if selection_rects.is_empty() {
+        position_toolbar_above_anchor(app, position, FLOATING_BUTTON_SIZE)
+    } else {
+        position_toolbar_near_selection(app, position, selection_rects, FLOATING_BUTTON_SIZE)
+    }
+}
+
+pub fn show_floating_button_at_position(
+    app: AppHandle,
+    position: Point,
+) -> Result<(), PublicError> {
+    let window = app
+        .get_webview_window("floating-button")
+        .ok_or_else(|| PublicError {
+            code: "floating_button_missing".to_string(),
+            message: "Floating button window is not configured.".to_string(),
+        })?;
+
+    show_floating_button_window(&window, position)
+}
+
+fn show_floating_button_window(
+    window: &tauri::WebviewWindow,
+    position: Point,
+) -> Result<(), PublicError> {
+    set_window_position(window, position)?;
     window
         .show()
         .map_err(|err| command_error("show_failed", err))?;
@@ -287,6 +344,7 @@ pub fn show_translate_result(
     position: Point,
     original_text: String,
     translated_text: String,
+    selection_rects: Vec<Rect>,
 ) -> Result<(), PublicError> {
     let window = app
         .get_webview_window("translate-result")
@@ -295,7 +353,15 @@ pub fn show_translate_result(
             message: "Translate result window is not configured.".to_string(),
         })?;
 
-    let position = position_window_near_anchor(&app, position, TRANSLATE_RESULT_SIZE)?;
+    let position = {
+        let screen = screen_bounds_for_anchor(&app, position)?;
+        let size = current_window_size(&window, TRANSLATE_RESULT_SIZE);
+        if selection_rects.is_empty() {
+            place_translate_result_near_anchor(position, size, screen)
+        } else {
+            place_translate_result_near_selection(position, &selection_rects, size, screen)
+        }
+    };
     set_window_position(&window, position)?;
     window
         .show()

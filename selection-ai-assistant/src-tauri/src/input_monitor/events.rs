@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::types::{Point, Rect};
 
-const ESTIMATED_TEXT_HALF_HEIGHT: f64 = 12.0;
+const ESTIMATED_TEXT_TOP_OFFSET: f64 = 12.0;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -112,6 +112,7 @@ pub enum MouseButtonEvent {
     Down(Point),
     Up(Point),
     Move(Point),
+    Wheel { position: Point, delta: f64 },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -133,7 +134,9 @@ pub struct PendingSelection {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct VisibleFloatingButton {
-    pub anchor: Point,
+    pub window_position: Point,
+    pub selection_anchor: Point,
+    pub selection_rect: Option<Rect>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -194,7 +197,7 @@ pub fn handle_mouse_button_event(
         MouseButtonEvent::Up(point) => drag_start
             .take()
             .map(|down| classify_mouse_up(down, point, min_drag_distance, assistant_windows)),
-        MouseButtonEvent::Move(_) => None,
+        MouseButtonEvent::Move(_) | MouseButtonEvent::Wheel { .. } => None,
     }
 }
 
@@ -300,7 +303,7 @@ fn drag_anchor_point(down: Point, up: Point) -> Point {
 fn drag_toolbar_anchor_point(down: Point, up: Point) -> Point {
     Point {
         x: down.x.min(up.x),
-        y: (down.y.min(up.y) - ESTIMATED_TEXT_HALF_HEIGHT).max(0.0),
+        y: (down.y.min(up.y) - ESTIMATED_TEXT_TOP_OFFSET).max(0.0),
     }
 }
 

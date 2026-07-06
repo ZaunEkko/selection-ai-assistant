@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     ffi::c_void,
     path::Path,
     ptr::null_mut,
@@ -9,7 +10,8 @@ use std::{
 
 use tauri::Manager;
 use windows_sys::Win32::{
-    Foundation::{CloseHandle, GlobalFree, BOOL, LPARAM, LRESULT, POINT, WPARAM},
+    Foundation::{CloseHandle, GlobalFree, BOOL, LPARAM, LRESULT, POINT, RECT as WinRect, WPARAM},
+    Graphics::Gdi::{GetPixel, GetWindowDC, ReleaseDC, HDC},
     Security::{GetTokenInformation, TokenElevation, TOKEN_ELEVATION, TOKEN_QUERY},
     System::{
         DataExchange::{
@@ -31,17 +33,20 @@ use windows_sys::Win32::{
         },
         WindowsAndMessaging::{
             CallNextHookEx, DispatchMessageW, GetCursorPos, GetForegroundWindow, GetMessageW,
-            GetWindowTextW, GetWindowThreadProcessId, SetWindowsHookExW, TranslateMessage,
-            UnhookWindowsHookEx, MSG, MSLLHOOKSTRUCT, WH_MOUSE_LL, WM_LBUTTONDOWN, WM_LBUTTONUP,
-            WM_MOUSEMOVE,
+            GetWindowRect, GetWindowTextW, GetWindowThreadProcessId, SetWindowsHookExW,
+            TranslateMessage, UnhookWindowsHookEx, MSG, MSLLHOOKSTRUCT, WH_MOUSE_LL,
+            WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL,
         },
     },
 };
 
 use crate::{
-    app_state::AppState,
+    app_state::{AppState, SelectionVisualState},
     commands::{
-        panel::{hide_floating_button, show_floating_button},
+        panel::{
+            floating_button_position_for_selection, hide_floating_button,
+            show_floating_button_at_position, show_floating_button_for_selection,
+        },
         selection::{
             create_panel_context_for_selection, emit_panel_context, open_panel_for_context,
         },
@@ -60,11 +65,14 @@ use crate::{
     },
     selection::{
         clipboard_reader::{
-            clipboard_restore_attempt_sequence, should_accept_selected_text_after_restore,
+            clipboard_restore_attempt_sequence, should_accept_selected_text_after_capture,
+            should_block_clipboard_fallback_after_uia_result,
             should_prepare_conservative_clipboard_capture, should_use_clipboard_fallback,
             ClipboardFallbackContext, ClipboardFormatSnapshot, ClipboardRestorePlan,
+            ClipboardRestoreStatus,
         },
         types::SelectionCandidate,
+        uia_reader::read_current_uia_selection_from_hwnd,
     },
     types::{AppWindowInfo, Point, Rect},
 };
@@ -72,6 +80,19 @@ use crate::{
 const KEY_DOWN: i16 = 0x8000u16 as i16;
 const CLIPBOARD_RESTORE_RETRY_COUNT: usize = 2;
 const CLIPBOARD_RESTORE_RETRY_DELAY: Duration = Duration::from_millis(30);
+const SCROLL_FOLLOW_RETRY_COUNT: usize = 2;
+const SCROLL_FOLLOW_RETRY_DELAY: Duration = Duration::from_millis(50);
+const SCROLL_FOLLOW_DEBOUNCE: Duration = Duration::from_millis(120);
+const SCROLL_FOLLOW_MAX_PLACEMENT_HEIGHT: f64 = 36.0;
+const SCROLL_PREDICT_PIXELS_PER_DELTA: f64 = 0.85;
+
+#[cfg(debug_assertions)]
+fn trace_selection_monitor(args: std::fmt::Arguments<'_>) {
+    eprintln!("[selection-monitor] {args}");
+}
+
+#[cfg(not(debug_assertions))]
+fn trace_selection_monitor(_args: std::fmt::Arguments<'_>) {}
 
 #[derive(Debug, Default, Clone, Copy)]
 pub struct WindowsPlatformBackend;
@@ -204,6 +225,17 @@ fn handle_mouse_event(
     event: MouseButtonEvent,
     now_ms: u64,
 ) {
+    trace_selection_monitor(format_args!("mouse event: {event:?}"));
+    if let MouseButtonEvent::Wheel { position, delta } = event {
+        let in_assistant_window = assistant_window_rects(app)
+            .iter()
+            .any(|window| crate::input_monitor::events::rect_contains(*window, position));
+        if !in_assistant_window {
+            follow_visible_floating_button_after_scroll(app, visible_floating_button, delta);
+        }
+        return;
+    }
+
     if let MouseButtonEvent::Move(position) = event {
         let config = current_config(app).unwrap_or_default();
         match hover_action_for_pending_selection_when_idle(
@@ -215,11 +247,10 @@ fn handle_mouse_event(
             config.hover_delay_ms,
         ) {
             PendingSelectionHoverAction::CaptureAndShowButton { anchor } => {
-                if let Some(toolbar_anchor) = capture_store_and_show_floating_button(app, anchor) {
+                if let Some(button) = capture_store_and_show_floating_button(app, anchor, &[], None)
+                {
                     *pending_selection = None;
-                    *visible_floating_button = Some(VisibleFloatingButton {
-                        anchor: toolbar_anchor,
-                    });
+                    *visible_floating_button = Some(button);
                 } else {
                     clear_selection_and_hide_button(app);
                     *pending_selection = None;
@@ -273,20 +304,28 @@ fn handle_mouse_event(
                 let in_assistant_window = assistant_window_rects(app)
                     .iter()
                     .any(|window| crate::input_monitor::events::rect_contains(*window, up_point));
+                trace_selection_monitor(format_args!(
+                    "mouse up: down={down_point:?}, up={up_point:?}, min_drag_distance={min_drag_distance}, is_drag_met={is_drag_met}, in_assistant_window={in_assistant_window}"
+                ));
 
                 if is_drag_met && !in_assistant_window {
+                    let selection_hint_rects = drag_selection_hint_rects(down_point, up_point);
                     let toolbar_anchor = Point {
                         x: down_point.x.min(up_point.x),
-                        y: (down_point.y.min(up_point.y) - 12.0).max(0.0),
+                        y: down_point.y.min(up_point.y).max(0.0),
                     };
+                    trace_selection_monitor(format_args!(
+                        "drag selection released; capture after 60ms at anchor={toolbar_anchor:?}"
+                    ));
                     thread::sleep(Duration::from_millis(60));
-                    if let Some(toolbar_anchor) =
-                        capture_store_and_show_floating_button(app, toolbar_anchor)
-                    {
+                    if let Some(button) = capture_store_and_show_floating_button(
+                        app,
+                        toolbar_anchor,
+                        &selection_hint_rects,
+                        Some((down_point, up_point)),
+                    ) {
                         *pending_selection = None;
-                        *visible_floating_button = Some(VisibleFloatingButton {
-                            anchor: toolbar_anchor,
-                        });
+                        *visible_floating_button = Some(button);
                     } else {
                         clear_selection_and_hide_button(app);
                         *pending_selection = None;
@@ -301,12 +340,345 @@ fn handle_mouse_event(
                 // 在助手窗口内时，保持选区不变
             }
         }
-        MouseButtonEvent::Move(_) => {} // Move 事件在上面已处理
+        MouseButtonEvent::Move(_) | MouseButtonEvent::Wheel { .. } => {} // Move/Wheel 事件在上面已处理
     }
 }
 
 static MOUSE_EVENT_SENDER: OnceLock<Mutex<Option<mpsc::Sender<MouseButtonEvent>>>> =
     OnceLock::new();
+
+fn drag_selection_hint_rects(down_point: Point, up_point: Point) -> Vec<Rect> {
+    const HINT_LINE_HEIGHT: f64 = 36.0;
+    const DRAG_Y_TO_TEXT_TOP_OFFSET: f64 = 34.0;
+    let x = down_point.x.min(up_point.x);
+    let y = (down_point.y.min(up_point.y) - DRAG_Y_TO_TEXT_TOP_OFFSET).max(0.0);
+    let width = (down_point.x - up_point.x).abs().max(1.0);
+
+    vec![Rect {
+        x,
+        y,
+        width,
+        height: HINT_LINE_HEIGHT,
+    }]
+}
+
+fn should_use_selection_hint_rects(hint_rects: &[Rect]) -> bool {
+    hint_rects.iter().any(is_valid_rect)
+}
+
+fn is_valid_rect(rect: &Rect) -> bool {
+    rect.width > 0.0 && rect.height > 0.0
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+struct ColorBucket {
+    count: u32,
+    red_sum: u32,
+    green_sum: u32,
+    blue_sum: u32,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct RowMatch {
+    y: i32,
+    min_x: i32,
+    max_x: i32,
+    count: i32,
+}
+
+fn visual_selection_from_drag(
+    source_window_handle: isize,
+    down_point: Point,
+    up_point: Point,
+) -> Option<SelectionVisualState> {
+    let window_rect = source_window_screen_rect(source_window_handle)?;
+    let hwnd = source_window_handle as *mut c_void;
+    let hdc = unsafe { GetWindowDC(hwnd) };
+    if hdc.is_null() {
+        return None;
+    }
+
+    let mid_point = Point {
+        x: (down_point.x + up_point.x) / 2.0,
+        y: (down_point.y + up_point.y) / 2.0,
+    };
+    let points = [down_point, up_point, mid_point];
+    let color = sample_selection_color(hdc, window_rect, &points);
+    let rect = color.and_then(|color| {
+        let search_rect = drag_visual_search_rect(window_rect, down_point, up_point)?;
+        find_visual_selection_rect_in_dc(
+            hdc,
+            window_rect,
+            search_rect,
+            color,
+            Some(down_point.y.min(up_point.y)),
+            Some(down_point.x.min(up_point.x)),
+        )
+        .map(|rect| SelectionVisualState {
+            source_window_handle,
+            color,
+            rect,
+        })
+    });
+
+    unsafe {
+        ReleaseDC(hwnd, hdc);
+    }
+    rect
+}
+
+fn visual_selection_from_stored(visual: SelectionVisualState) -> Option<SelectionVisualState> {
+    let window_rect = source_window_screen_rect(visual.source_window_handle)?;
+    let search_rect = stored_visual_search_rect(window_rect, visual.rect)?;
+    let hwnd = visual.source_window_handle as *mut c_void;
+    let hdc = unsafe { GetWindowDC(hwnd) };
+    if hdc.is_null() {
+        return None;
+    }
+
+    let rect = find_visual_selection_rect_in_dc(
+        hdc,
+        window_rect,
+        search_rect,
+        visual.color,
+        None,
+        Some(visual.rect.x + visual.rect.width / 2.0),
+    )
+    .map(|rect| SelectionVisualState { rect, ..visual });
+
+    unsafe {
+        ReleaseDC(hwnd, hdc);
+    }
+    rect
+}
+
+fn source_window_screen_rect(source_window_handle: isize) -> Option<Rect> {
+    let hwnd = source_window_handle as *mut c_void;
+    let mut rect = WinRect {
+        left: 0,
+        top: 0,
+        right: 0,
+        bottom: 0,
+    };
+    let ok = unsafe { GetWindowRect(hwnd, &mut rect) };
+    if ok == 0 || rect.right <= rect.left || rect.bottom <= rect.top {
+        return None;
+    }
+
+    Some(Rect {
+        x: rect.left as f64,
+        y: rect.top as f64,
+        width: (rect.right - rect.left) as f64,
+        height: (rect.bottom - rect.top) as f64,
+    })
+}
+
+fn drag_visual_search_rect(window_rect: Rect, down_point: Point, up_point: Point) -> Option<Rect> {
+    let top = down_point.y.min(up_point.y) - 140.0;
+    let bottom = down_point.y.max(up_point.y) + 220.0;
+    intersect_rects(
+        Rect {
+            x: window_rect.x,
+            y: top,
+            width: window_rect.width,
+            height: (bottom - top).max(1.0),
+        },
+        window_rect,
+    )
+}
+
+fn stored_visual_search_rect(window_rect: Rect, previous_rect: Rect) -> Option<Rect> {
+    let left = previous_rect.x - 220.0;
+    let right = previous_rect.x + previous_rect.width + 220.0;
+    let top = previous_rect.y - 320.0;
+    let bottom = previous_rect.y + previous_rect.height + 320.0;
+    intersect_rects(
+        Rect {
+            x: left,
+            y: top,
+            width: (right - left).max(1.0),
+            height: (bottom - top).max(1.0),
+        },
+        window_rect,
+    )
+}
+
+fn intersect_rects(a: Rect, b: Rect) -> Option<Rect> {
+    let left = a.x.max(b.x);
+    let top = a.y.max(b.y);
+    let right = (a.x + a.width).min(b.x + b.width);
+    let bottom = (a.y + a.height).min(b.y + b.height);
+    (right > left && bottom > top).then_some(Rect {
+        x: left,
+        y: top,
+        width: right - left,
+        height: bottom - top,
+    })
+}
+
+fn sample_selection_color(hdc: HDC, window_rect: Rect, points: &[Point]) -> Option<(u8, u8, u8)> {
+    let mut buckets: HashMap<(u8, u8, u8), ColorBucket> = HashMap::new();
+
+    for point in points {
+        for y_offset in (-12..=12).step_by(3) {
+            for x_offset in (-12..=12).step_by(3) {
+                let screen_x = point.x.round() as i32 + x_offset;
+                let screen_y = point.y.round() as i32 + y_offset;
+                if !point_in_rect(screen_x, screen_y, window_rect) {
+                    continue;
+                }
+                let Some((red, green, blue)) = pixel_rgb(hdc, window_rect, screen_x, screen_y)
+                else {
+                    continue;
+                };
+                let key = (red / 16, green / 16, blue / 16);
+                let bucket = buckets.entry(key).or_default();
+                bucket.count += 1;
+                bucket.red_sum += red as u32;
+                bucket.green_sum += green as u32;
+                bucket.blue_sum += blue as u32;
+            }
+        }
+    }
+
+    let bucket = buckets
+        .values()
+        .filter(|bucket| bucket.count >= 6)
+        .max_by_key(|bucket| bucket.count)?;
+    Some((
+        (bucket.red_sum / bucket.count) as u8,
+        (bucket.green_sum / bucket.count) as u8,
+        (bucket.blue_sum / bucket.count) as u8,
+    ))
+}
+
+fn find_visual_selection_rect_in_dc(
+    hdc: HDC,
+    window_rect: Rect,
+    search_rect: Rect,
+    color: (u8, u8, u8),
+    preferred_y: Option<f64>,
+    preferred_x: Option<f64>,
+) -> Option<Rect> {
+    let left = search_rect.x.round() as i32;
+    let right = (search_rect.x + search_rect.width).round() as i32;
+    let top = search_rect.y.round() as i32;
+    let bottom = (search_rect.y + search_rect.height).round() as i32;
+    let mut row_matches = Vec::new();
+
+    for y in top..bottom {
+        let mut min_x: Option<i32> = None;
+        let mut max_x: Option<i32> = None;
+        let mut count = 0;
+        let mut current_run = 0;
+        let mut max_run = 0;
+
+        for x in left..right {
+            let matches = pixel_rgb(hdc, window_rect, x, y)
+                .map(|pixel| colors_are_close(pixel, color))
+                .unwrap_or(false);
+            if matches {
+                min_x = Some(min_x.map_or(x, |current| current.min(x)));
+                max_x = Some(max_x.map_or(x, |current| current.max(x)));
+                count += 1;
+                current_run += 1;
+                max_run = max_run.max(current_run);
+            } else {
+                current_run = 0;
+            }
+        }
+
+        if count >= 18 && max_run >= 14 {
+            row_matches.push(RowMatch {
+                y,
+                min_x: min_x.unwrap_or(left),
+                max_x: max_x.unwrap_or(left),
+                count,
+            });
+        }
+    }
+
+    let mut candidates = Vec::new();
+    let mut index = 0;
+    while index < row_matches.len() {
+        let mut top_y = row_matches[index].y;
+        let mut bottom_y = row_matches[index].y;
+        let mut min_x = row_matches[index].min_x;
+        let mut max_x = row_matches[index].max_x;
+        let mut total_count = row_matches[index].count;
+        index += 1;
+
+        while index < row_matches.len() && row_matches[index].y - bottom_y <= 4 {
+            bottom_y = row_matches[index].y;
+            min_x = min_x.min(row_matches[index].min_x);
+            max_x = max_x.max(row_matches[index].max_x);
+            total_count += row_matches[index].count;
+            index += 1;
+        }
+
+        let width = (max_x - min_x + 1) as f64;
+        let height = (bottom_y - top_y + 1) as f64;
+        if width >= 20.0 && height >= 8.0 && total_count >= 160 {
+            candidates.push(Rect {
+                x: min_x as f64,
+                y: top_y as f64,
+                width,
+                height,
+            });
+        }
+        top_y = bottom_y;
+        let _ = top_y;
+    }
+
+    candidates.into_iter().min_by(|a, b| {
+        let score_a = visual_rect_score(*a, preferred_y, preferred_x);
+        let score_b = visual_rect_score(*b, preferred_y, preferred_x);
+        score_a
+            .partial_cmp(&score_b)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    })
+}
+
+fn visual_rect_score(rect: Rect, preferred_y: Option<f64>, preferred_x: Option<f64>) -> f64 {
+    let center_x = rect.x + rect.width / 2.0;
+    let center_y = rect.y + rect.height / 2.0;
+    let y_score = preferred_y.map_or(rect.y * 0.02, |y| (center_y - y).abs());
+    let x_score = preferred_x.map_or(0.0, |x| (center_x - x).abs() * 0.15);
+    y_score + x_score - rect.width.min(900.0) * 0.01
+}
+
+fn point_in_rect(x: i32, y: i32, rect: Rect) -> bool {
+    x as f64 >= rect.x
+        && x as f64 <= rect.x + rect.width
+        && y as f64 >= rect.y
+        && y as f64 <= rect.y + rect.height
+}
+
+fn pixel_rgb(hdc: HDC, window_rect: Rect, screen_x: i32, screen_y: i32) -> Option<(u8, u8, u8)> {
+    let local_x = screen_x - window_rect.x.round() as i32;
+    let local_y = screen_y - window_rect.y.round() as i32;
+    if local_x < 0 || local_y < 0 {
+        return None;
+    }
+
+    let color = unsafe { GetPixel(hdc, local_x, local_y) };
+    if color == u32::MAX {
+        return None;
+    }
+
+    Some((
+        (color & 0xff) as u8,
+        ((color >> 8) & 0xff) as u8,
+        ((color >> 16) & 0xff) as u8,
+    ))
+}
+
+fn colors_are_close(a: (u8, u8, u8), b: (u8, u8, u8)) -> bool {
+    let red = a.0.abs_diff(b.0) as u16;
+    let green = a.1.abs_diff(b.1) as u16;
+    let blue = a.2.abs_diff(b.2) as u16;
+    red <= 28 && green <= 28 && blue <= 28 && red + green + blue <= 72
+}
 
 fn start_low_level_mouse_hook(sender: mpsc::Sender<MouseButtonEvent>) {
     thread::spawn(move || {
@@ -319,11 +691,13 @@ fn start_low_level_mouse_hook(sender: mpsc::Sender<MouseButtonEvent>) {
 
         let hook = unsafe { SetWindowsHookExW(WH_MOUSE_LL, Some(mouse_hook_proc), null_mut(), 0) };
         if hook.is_null() {
+            trace_selection_monitor(format_args!("failed to install low-level mouse hook"));
             if let Ok(mut slot) = sender_slot.lock() {
                 *slot = None;
             }
             return;
         }
+        trace_selection_monitor(format_args!("low-level mouse hook installed"));
 
         let mut message: MSG = unsafe { std::mem::zeroed() };
         while unsafe { GetMessageW(&mut message, null_mut(), 0, 0) } > 0 {
@@ -348,6 +722,10 @@ unsafe extern "system" fn mouse_hook_proc(code: i32, w_param: WPARAM, l_param: L
             WM_LBUTTONDOWN => Some(MouseButtonEvent::Down(mouse_hook_point(l_param))),
             WM_LBUTTONUP => Some(MouseButtonEvent::Up(mouse_hook_point(l_param))),
             WM_MOUSEMOVE => Some(MouseButtonEvent::Move(mouse_hook_point(l_param))),
+            WM_MOUSEWHEEL => Some(MouseButtonEvent::Wheel {
+                position: mouse_hook_point(l_param),
+                delta: mouse_hook_wheel_delta(l_param),
+            }),
             _ => None,
         };
 
@@ -373,18 +751,121 @@ unsafe fn mouse_hook_point(l_param: LPARAM) -> Point {
     }
 }
 
-fn capture_store_and_show_floating_button(app: &tauri::AppHandle, anchor: Point) -> Option<Point> {
-    let config = current_config(app)?;
+unsafe fn mouse_hook_wheel_delta(l_param: LPARAM) -> f64 {
+    let hook = &*(l_param as *const MSLLHOOKSTRUCT);
+    ((hook.mouseData >> 16) as u16 as i16) as f64
+}
 
-    let (context, source_window_handle) = read_current_selection_context(anchor, &config)?;
-    let toolbar_anchor = context.selection.toolbar_anchor_point();
+fn capture_store_and_show_floating_button(
+    app: &tauri::AppHandle,
+    anchor: Point,
+    selection_hint_rects: &[Rect],
+    drag_points: Option<(Point, Point)>,
+) -> Option<VisibleFloatingButton> {
+    let config = match current_config(app) {
+        Some(config) => config,
+        None => {
+            trace_selection_monitor(format_args!("capture failed: config unavailable"));
+            return None;
+        }
+    };
+
+    let (context, source_window_handle) = match read_current_selection_context(anchor, &config) {
+        Some(result) => result,
+        None => {
+            trace_selection_monitor(format_args!("capture failed: no selection context"));
+            return None;
+        }
+    };
+    let visual_selection = drag_points.and_then(|(down_point, up_point)| {
+        visual_selection_from_drag(source_window_handle, down_point, up_point)
+    });
+    let uses_visual_selection = visual_selection.is_some();
+    let uses_selection_hint =
+        !uses_visual_selection && should_use_selection_hint_rects(selection_hint_rects);
+    let toolbar_selection_rects = if let Some(visual) = visual_selection {
+        trace_selection_monitor(format_args!(
+            "floating button placement uses visual selection: rect={:?}, color={:?}, uia_rects={}",
+            visual.rect,
+            visual.color,
+            context.selection.selection_rects.len()
+        ));
+        vec![visual.rect]
+    } else if uses_selection_hint {
+        trace_selection_monitor(format_args!(
+            "floating button placement uses drag hint: uia_rects={}, hint_rects={}",
+            context.selection.selection_rects.len(),
+            selection_hint_rects.len()
+        ));
+        selection_hint_rects.to_vec()
+    } else {
+        context.selection.selection_rects.clone()
+    };
+    let toolbar_anchor = if uses_visual_selection || uses_selection_hint {
+        toolbar_selection_rects
+            .iter()
+            .copied()
+            .find(is_valid_rect)
+            .map(|rect| Point {
+                x: rect.x,
+                y: rect.y,
+            })
+            .unwrap_or_else(|| context.selection.toolbar_anchor_point())
+    } else {
+        context.selection.toolbar_anchor_point()
+    };
+    let selection_rect = toolbar_selection_rects
+        .iter()
+        .copied()
+        .find(is_valid_rect)
+        .map(scroll_follow_placement_rect);
     let state = app.state::<AppState>();
     state.store_latest_selection(context.clone());
     state.store_latest_selection_window_handle(source_window_handle);
+    if let Some(visual) = visual_selection {
+        state.store_latest_selection_visual(visual);
+    } else {
+        state.clear_latest_selection_visual();
+    }
     emit_context_if_panel_visible(app, &context);
-    show_floating_button(app.clone(), toolbar_anchor)
-        .map(|_| toolbar_anchor)
-        .ok()
+    match show_floating_button_for_selection(app.clone(), toolbar_anchor, &toolbar_selection_rects)
+    {
+        Ok(()) => {
+            trace_selection_monitor(format_args!(
+                "floating button shown: toolbar_anchor={toolbar_anchor:?}, text_len={}",
+                context.selection.text.chars().count()
+            ));
+            let window_position = floating_button_window_position(app).unwrap_or(toolbar_anchor);
+            state.store_latest_floating_button_window_position(window_position);
+            Some(VisibleFloatingButton {
+                window_position,
+                selection_anchor: toolbar_anchor,
+                selection_rect,
+            })
+        }
+        Err(error) => {
+            trace_selection_monitor(format_args!(
+                "capture failed: show_floating_button error: {error:?}"
+            ));
+            None
+        }
+    }
+}
+
+fn scroll_follow_placement_rect(rect: Rect) -> Rect {
+    Rect {
+        height: rect.height.min(SCROLL_FOLLOW_MAX_PLACEMENT_HEIGHT).max(1.0),
+        ..rect
+    }
+}
+
+fn floating_button_window_position(app: &tauri::AppHandle) -> Option<Point> {
+    let window = app.get_webview_window("floating-button")?;
+    let position = window.outer_position().ok()?;
+    Some(Point {
+        x: position.x as f64,
+        y: position.y as f64,
+    })
 }
 
 fn capture_store_and_open_panel(app: &tauri::AppHandle, fallback_point: Point) {
@@ -411,6 +892,177 @@ fn capture_store_and_open_panel(app: &tauri::AppHandle, fallback_point: Point) {
 fn clear_selection_and_hide_button(app: &tauri::AppHandle) {
     app.state::<AppState>().clear_latest_selection();
     let _ = hide_floating_button(app.clone());
+}
+
+fn follow_visible_floating_button_after_scroll(
+    app: &tauri::AppHandle,
+    visible_floating_button: &mut Option<VisibleFloatingButton>,
+    wheel_delta: f64,
+) {
+    let Some(visible) = visible_floating_button.as_mut() else {
+        return;
+    };
+
+    let state = app.state::<AppState>();
+    let generation = state.next_scroll_follow_generation();
+    let predicted_delta_y = wheel_delta * SCROLL_PREDICT_PIXELS_PER_DELTA;
+    let base_window_position = state
+        .latest_floating_button_window_position()
+        .or_else(|| floating_button_window_position(app))
+        .unwrap_or(visible.window_position);
+    visible.window_position = Point {
+        x: base_window_position.x,
+        y: base_window_position.y + predicted_delta_y,
+    };
+    visible.selection_anchor.y += predicted_delta_y;
+    visible.selection_rect = visible.selection_rect.map(|rect| Rect {
+        y: rect.y + predicted_delta_y,
+        ..rect
+    });
+    state.store_latest_floating_button_window_position(visible.window_position);
+
+    let predicted_visual_rect = visible.selection_rect.or_else(|| {
+        state.latest_selection_visual().map(|visual| {
+            scroll_follow_placement_rect(Rect {
+                y: visual.rect.y + predicted_delta_y,
+                ..visual.rect
+            })
+        })
+    });
+
+    if show_floating_button_at_position(app.clone(), visible.window_position).is_ok() {
+        trace_selection_monitor(format_args!(
+            "floating button predicted scroll follow: generation={generation}, delta_y={predicted_delta_y}, window_position={:?}",
+            visible.window_position
+        ));
+    }
+
+    let app = app.clone();
+    let predicted_window_position = visible.window_position;
+    thread::spawn(move || {
+        thread::sleep(SCROLL_FOLLOW_DEBOUNCE);
+        if app.state::<AppState>().scroll_follow_generation() != generation {
+            return;
+        }
+        for attempt in 0..SCROLL_FOLLOW_RETRY_COUNT {
+            if let Some(window_position) = refresh_visible_floating_button_from_visual(
+                &app,
+                predicted_visual_rect,
+                predicted_window_position,
+            ) {
+                trace_selection_monitor(format_args!(
+                    "floating button corrected scroll via visual selection: attempt={}, generation={}, window_position={window_position:?}",
+                    attempt + 1,
+                    generation
+                ));
+                return;
+            }
+            if let Some(window_position) = refresh_visible_floating_button_from_uia(
+                &app,
+                predicted_visual_rect,
+                predicted_window_position,
+            ) {
+                trace_selection_monitor(format_args!(
+                    "floating button corrected scroll via UIA: attempt={}, generation={}, window_position={window_position:?}",
+                    attempt + 1,
+                    generation
+                ));
+                return;
+            }
+            thread::sleep(SCROLL_FOLLOW_RETRY_DELAY);
+        }
+
+        trace_selection_monitor(format_args!(
+            "floating button kept predicted position after scroll: selection rect could not be refreshed"
+        ));
+    });
+}
+
+fn refresh_visible_floating_button_from_visual(
+    app: &tauri::AppHandle,
+    predicted_rect: Option<Rect>,
+    predicted_window_position: Point,
+) -> Option<Point> {
+    let state = app.state::<AppState>();
+    let visual = state.latest_selection_visual()?;
+    let refreshed = predicted_rect
+        .and_then(|rect| visual_selection_from_stored(SelectionVisualState { rect, ..visual }))
+        .or_else(|| visual_selection_from_stored(visual))?;
+    let placement_rect = predicted_rect.map_or(refreshed.rect, |rect| Rect {
+        x: rect.x,
+        width: rect.width,
+        y: refreshed.rect.y,
+        height: refreshed.rect.height,
+    });
+    let toolbar_anchor = Point {
+        x: placement_rect.x,
+        y: placement_rect.y,
+    };
+    let positioned =
+        floating_button_position_for_selection(app, toolbar_anchor, &[placement_rect]).ok()?;
+    let window_position = Point {
+        x: predicted_window_position.x,
+        y: positioned.y,
+    };
+    show_floating_button_at_position(app.clone(), window_position).ok()?;
+    state.store_latest_floating_button_window_position(window_position);
+    state.store_latest_selection_visual(SelectionVisualState {
+        rect: placement_rect,
+        ..refreshed
+    });
+    Some(window_position)
+}
+
+fn refresh_visible_floating_button_from_uia(
+    app: &tauri::AppHandle,
+    predicted_rect: Option<Rect>,
+    predicted_window_position: Point,
+) -> Option<Point> {
+    let state = app.state::<AppState>();
+    let mut context = state.latest_selection()?;
+    let source_window_handle = state.latest_selection_window_handle()?;
+    let uia_result = read_current_uia_selection_from_hwnd(source_window_handle as *mut c_void)?;
+    if uia_result.rects.is_empty() {
+        return None;
+    }
+    if let Some(text) = uia_result.text.as_ref() {
+        if text.trim() != context.selection.text.trim() {
+            return None;
+        }
+    }
+
+    context.selection.selection_rects = if let Some(predicted_rect) = predicted_rect {
+        let refreshed_rect = uia_result.rects.iter().copied().find(is_valid_rect)?;
+        vec![Rect {
+            x: predicted_rect.x,
+            width: predicted_rect.width,
+            y: refreshed_rect.y,
+            height: refreshed_rect.height,
+        }]
+    } else {
+        uia_result.rects
+    };
+    context.selection.explicit_anchor = None;
+    let anchor_point = context.selection.anchor_point();
+    context.selection.explicit_anchor = Some(anchor_point);
+    context.selection.fallback_point = anchor_point;
+    let toolbar_anchor = context.selection.toolbar_anchor_point();
+    state.store_latest_selection(context.clone());
+    state.clear_latest_selection_visual();
+    emit_context_if_panel_visible(app, &context);
+    let positioned = floating_button_position_for_selection(
+        app,
+        toolbar_anchor,
+        &context.selection.selection_rects,
+    )
+    .ok()?;
+    let window_position = Point {
+        x: predicted_window_position.x,
+        y: positioned.y,
+    };
+    show_floating_button_at_position(app.clone(), window_position).ok()?;
+    state.store_latest_floating_button_window_position(window_position);
+    Some(window_position)
 }
 
 fn emit_context_if_panel_visible(
@@ -460,7 +1112,55 @@ fn read_current_selection_context(
     fallback_point: Point,
     config: &AppConfig,
 ) -> Option<(crate::commands::selection::PanelContext, isize)> {
-    let (window, source_window_handle) = foreground_window_info(config)?;
+    let (window, source_window_handle) = match foreground_window_info(config) {
+        Some(result) => result,
+        None => {
+            trace_selection_monitor(format_args!(
+                "selection read failed: foreground window unavailable"
+            ));
+            return None;
+        }
+    };
+    trace_selection_monitor(format_args!(
+        "foreground window: process={}, title={:?}, elevated={}, fallback_point={fallback_point:?}",
+        window.process_name, window.window_title, window.elevated
+    ));
+    let uia_result = read_current_uia_selection_from_hwnd(source_window_handle as *mut c_void);
+    if let Some(selection) = uia_result
+        .clone()
+        .filter(|result| !result.rects.is_empty())
+        .and_then(|result| {
+            SelectionCandidate::from_uia_result(
+                result,
+                window.process_name.clone(),
+                window.window_title.clone(),
+                fallback_point,
+            )
+        })
+    {
+        trace_selection_monitor(format_args!(
+            "selection read succeeded via UIA: chars={}, rects={}",
+            selection.text.chars().count(),
+            selection.selection_rects.len()
+        ));
+        return match create_panel_context_for_selection(selection, false) {
+            Ok(context) => Some((context, source_window_handle)),
+            Err(error) => {
+                trace_selection_monitor(format_args!(
+                    "selection read failed: UIA context error: {error:?}"
+                ));
+                None
+            }
+        };
+    }
+
+    if should_block_clipboard_fallback_after_uia_result(uia_result.as_ref()) {
+        trace_selection_monitor(format_args!(
+            "selection read failed: UIA reported password control; clipboard fallback blocked"
+        ));
+        return None;
+    }
+
     let fallback_context = ClipboardFallbackContext {
         clipboard_fallback_enabled: config.clipboard_fallback_enabled,
         process_name: window.process_name.clone(),
@@ -471,19 +1171,41 @@ fn read_current_selection_context(
     };
 
     if !should_use_clipboard_fallback(&fallback_context) {
+        trace_selection_monitor(format_args!(
+            "selection read failed: clipboard fallback disabled for process={} elevated={}",
+            fallback_context.process_name, fallback_context.is_elevated_window
+        ));
         return None;
     }
 
-    let text = copy_selection_with_clipboard_restore()?;
+    let text = match copy_selection_with_clipboard_restore() {
+        Some(text) => text,
+        None => {
+            trace_selection_monitor(format_args!(
+                "selection read failed: clipboard copy returned no text"
+            ));
+            return None;
+        }
+    };
+    trace_selection_monitor(format_args!(
+        "selection read succeeded: chars={}",
+        text.chars().count()
+    ));
     let selection = SelectionCandidate::from_clipboard_text(
         text,
         window.process_name,
         window.window_title,
         fallback_point,
     );
-    create_panel_context_for_selection(selection, false)
-        .ok()
-        .map(|context| (context, source_window_handle))
+    match create_panel_context_for_selection(selection, false) {
+        Ok(context) => Some((context, source_window_handle)),
+        Err(error) => {
+            trace_selection_monitor(format_args!(
+                "selection read failed: context error: {error:?}"
+            ));
+            None
+        }
+    }
 }
 
 fn key_down(vk: i32) -> bool {
@@ -608,21 +1330,52 @@ fn is_process_elevated(process: *mut c_void) -> Option<bool> {
 
 fn copy_selection_with_clipboard_restore() -> Option<String> {
     let before_sequence = clipboard_sequence_number();
-    let restore_plan = clipboard_restore_plan()?;
+    let restore_plan = clipboard_restore_plan();
+    if restore_plan.is_none() {
+        trace_selection_monitor(format_args!(
+            "clipboard capture: original clipboard cannot be restored; selected text may remain on clipboard"
+        ));
+    }
 
     send_ctrl_c();
     thread::sleep(Duration::from_millis(120));
 
-    let sequence_changed = clipboard_sequence_number() != before_sequence;
+    let after_sequence = clipboard_sequence_number();
+    let sequence_changed = after_sequence != before_sequence;
     let selected = if sequence_changed {
-        read_clipboard_unicode().map(|text| text.trim().to_string())
+        let selected = read_clipboard_unicode().map(|text| text.trim().to_string());
+        trace_selection_monitor(format_args!(
+            "clipboard changed: before={before_sequence}, after={after_sequence}, chars={}",
+            selected
+                .as_deref()
+                .map(str::chars)
+                .map(Iterator::count)
+                .unwrap_or(0)
+        ));
+        selected
     } else {
+        trace_selection_monitor(format_args!(
+            "clipboard did not change after Ctrl+C: sequence={before_sequence}"
+        ));
         None
     };
 
-    let restored_clipboard = restore_clipboard_with_retry(restore_plan);
+    let restore_status = match restore_plan {
+        Some(plan) => {
+            let restored_clipboard = restore_clipboard_with_retry(plan);
+            trace_selection_monitor(format_args!(
+                "clipboard restore result: restored_original_clipboard={restored_clipboard}"
+            ));
+            if restored_clipboard {
+                ClipboardRestoreStatus::RestoredOriginal
+            } else {
+                ClipboardRestoreStatus::RestoreFailed
+            }
+        }
+        None => ClipboardRestoreStatus::OriginalUnavailable,
+    };
 
-    should_accept_selected_text_after_restore(selected.as_deref(), restored_clipboard)
+    should_accept_selected_text_after_capture(selected.as_deref(), restore_status)
 }
 
 fn clipboard_sequence_number() -> u32 {

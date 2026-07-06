@@ -1,7 +1,11 @@
 import { listen } from '@tauri-apps/api/event';
-import { getCurrentWindow } from '@tauri-apps/api/window';
 import { useEffect, useState } from 'react';
-import { formatCommandError } from '../api/tauri';
+import {
+  formatCommandError,
+  hideTranslateResult,
+  startDragTranslateResultWindow,
+  startResizeTranslateResultWindow,
+} from '../api/tauri';
 
 type TranslateResultEvent = {
   originalText: string;
@@ -9,7 +13,6 @@ type TranslateResultEvent = {
 };
 
 export function TranslateResult() {
-  const [originalText, setOriginalText] = useState<string>('');
   const [translatedText, setTranslatedText] = useState<string>('');
   const [error, setError] = useState<string | null>(null);
 
@@ -19,7 +22,6 @@ export function TranslateResult() {
 
     listen<TranslateResultEvent>('translate_result', (event) => {
       if (active) {
-        setOriginalText(event.payload.originalText);
         setTranslatedText(event.payload.translatedText);
         setError(null);
       }
@@ -40,34 +42,48 @@ export function TranslateResult() {
   }, []);
 
   async function handleClose() {
-    await getCurrentWindow().hide();
+    await hideTranslateResult();
   }
 
   return (
     <div className="translate-result-window">
-      <header className="translate-result-header">
-        <span className="translate-result-title">翻译对照</span>
-        <button className="translate-result-close" type="button" onClick={() => void handleClose()} aria-label="关闭">
+      <header
+        className="translate-result-header"
+        title="拖拽移动翻译浮窗"
+        onMouseDown={() => void startDragTranslateResultWindow()}
+      >
+        <span className="translate-result-title">译文</span>
+        <button
+          className="translate-result-close"
+          type="button"
+          onClick={(event) => {
+            event.stopPropagation();
+            void handleClose();
+          }}
+          onMouseDown={(event) => event.stopPropagation()}
+          aria-label="关闭翻译浮窗"
+        >
           ×
         </button>
       </header>
       <div className="translate-result-body">
         {error && <p role="alert">{error}</p>}
         {translatedText ? (
-          <div className="translate-result-compare" aria-label="翻译对照">
-            <section>
-              <h2>原文</h2>
-              <p className="translate-result-source">{originalText}</p>
-            </section>
-            <section>
-              <h2>译文</h2>
-              <p className="translate-result-text">{translatedText}</p>
-            </section>
-          </div>
+          <p className="translate-result-text" aria-label="译文内容">{translatedText}</p>
         ) : (
           <p className="translate-result-loading">正在翻译…</p>
         )}
       </div>
+      <button
+        className="translate-result-resize"
+        type="button"
+        aria-label="调整翻译浮窗大小"
+        onMouseDown={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          void startResizeTranslateResultWindow('SouthEast');
+        }}
+      />
     </div>
   );
 }
