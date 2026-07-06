@@ -1,7 +1,46 @@
 use selection_ai_assistant_lib::floating_window::positioning::{
-    place_near_anchor, place_source_left_of_panel, ScreenBounds, WindowSize,
+    place_near_anchor, place_source_left_of_panel, place_toolbar_above_anchor, ScreenBounds,
+    WindowSize,
 };
 use selection_ai_assistant_lib::types::Point;
+
+#[test]
+fn places_toolbar_above_anchor_aligned_to_selection_start_when_top_space_allows() {
+    let position = place_toolbar_above_anchor(
+        Point { x: 500.0, y: 300.0 },
+        WindowSize {
+            width: 300.0,
+            height: 52.0,
+        },
+        ScreenBounds {
+            x: 0.0,
+            y: 0.0,
+            width: 1920.0,
+            height: 1080.0,
+        },
+    );
+
+    assert_eq!(position, Point { x: 500.0, y: 240.0 });
+}
+
+#[test]
+fn clamps_toolbar_to_screen_top_when_top_space_is_tight() {
+    let position = place_toolbar_above_anchor(
+        Point { x: 120.0, y: 58.0 },
+        WindowSize {
+            width: 300.0,
+            height: 52.0,
+        },
+        ScreenBounds {
+            x: 0.0,
+            y: 0.0,
+            width: 1920.0,
+            height: 1080.0,
+        },
+    );
+
+    assert_eq!(position, Point { x: 120.0, y: 0.0 });
+}
 
 #[test]
 fn places_window_near_anchor_inside_screen() {

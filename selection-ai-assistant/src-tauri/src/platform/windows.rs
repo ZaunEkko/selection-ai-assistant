@@ -48,11 +48,11 @@ use crate::{
     },
     config::AppConfig,
     input_monitor::events::{
-        apply_mouse_up_action_to_pending_selection, consume_pending_selection, handle_hotkey_state,
-        handle_mouse_button_event, hover_action_for_pending_selection_when_idle,
+        consume_pending_selection, handle_hotkey_state,
+        hover_action_for_pending_selection_when_idle, manual_hotkey_trigger_key,
         visible_floating_button_action_when_idle, HotkeyAction, HotkeyKeyState, MouseButtonEvent,
-        PendingHotkeyAction, PendingSelection, PendingSelectionHoverAction, SelectionMouseUpEffect,
-        VisibleFloatingButton, VisibleFloatingButtonAction,
+        PendingHotkeyAction, PendingSelection, PendingSelectionHoverAction, VisibleFloatingButton,
+        VisibleFloatingButtonAction,
     },
     platform::{
         ClipboardBackend, InputMonitor, PermissionChecker, PlatformBackend, PlatformFeatureStatus,
@@ -69,7 +69,6 @@ use crate::{
     types::{AppWindowInfo, Point, Rect},
 };
 
-const VK_A: i32 = 0x41;
 const KEY_DOWN: i16 = 0x8000u16 as i16;
 const CLIPBOARD_RESTORE_RETRY_COUNT: usize = 2;
 const CLIPBOARD_RESTORE_RETRY_DELAY: Duration = Duration::from_millis(30);
@@ -152,10 +151,13 @@ fn start(app: tauri::AppHandle) {
             }
 
             let cursor = cursor_point().unwrap_or(Point { x: 0.0, y: 0.0 });
+            let trigger_key = current_config(&app)
+                .and_then(|config| manual_hotkey_trigger_key(&config.hotkey))
+                .unwrap_or('A');
             let keys = HotkeyKeyState {
                 ctrl: key_down(VK_CONTROL as i32),
                 alt: key_down(VK_MENU as i32),
-                a: key_down(VK_A),
+                a: key_down(trigger_key as i32),
             };
             match handle_hotkey_state(&mut pending_hotkey, keys) {
                 HotkeyAction::Armed => {
@@ -213,9 +215,11 @@ fn handle_mouse_event(
             config.hover_delay_ms,
         ) {
             PendingSelectionHoverAction::CaptureAndShowButton { anchor } => {
-                if capture_store_and_show_floating_button(app, anchor) {
+                if let Some(toolbar_anchor) = capture_store_and_show_floating_button(app, anchor) {
                     *pending_selection = None;
-                    *visible_floating_button = Some(VisibleFloatingButton { anchor });
+                    *visible_floating_button = Some(VisibleFloatingButton {
+                        anchor: toolbar_anchor,
+                    });
                 } else {
                     clear_selection_and_hide_button(app);
                     *pending_selection = None;
@@ -238,6 +242,7 @@ fn handle_mouse_event(
         {
             *pending_selection = Some(PendingSelection {
                 anchor,
+                toolbar_anchor: anchor,
                 hover_started_at_ms: None,
             });
             let _ = hide_floating_button(app.clone());
@@ -248,28 +253,55 @@ fn handle_mouse_event(
     let min_drag_distance = current_config(app)
         .map(|config| config.min_drag_distance)
         .unwrap_or(6.0);
-    let Some(action) = handle_mouse_button_event(
-        drag_start,
-        pending_selection,
-        event,
-        min_drag_distance,
-        &assistant_window_rects(app),
-    ) else {
-        return;
-    };
 
-    match apply_mouse_up_action_to_pending_selection(pending_selection, action) {
-        SelectionMouseUpEffect::PendingAnchorArmedAndClearSelectionAndHide => {
-            *visible_floating_button = None;
-            clear_selection_and_hide_button(app);
+    // 处理 mouse button 事件
+    match event {
+        MouseButtonEvent::Down(point) => {
+            *drag_start = Some(point);
+            consume_pending_selection(pending_selection);
         }
-        SelectionMouseUpEffect::ClearSelectionAndHide => {
-            *visible_floating_button = None;
-            clear_selection_and_hide_button(app);
+        MouseButtonEvent::Up(up_point) => {
+            if let Some(down_point) = drag_start.take() {
+                // 检查是否满足 drag 距离
+                let is_drag_met = crate::input_monitor::events::is_drag_distance_met(
+                    down_point,
+                    up_point,
+                    min_drag_distance,
+                );
+
+                // 检查是否在助手窗口内
+                let in_assistant_window = assistant_window_rects(app)
+                    .iter()
+                    .any(|window| crate::input_monitor::events::rect_contains(*window, up_point));
+
+                if is_drag_met && !in_assistant_window {
+                    let toolbar_anchor = Point {
+                        x: down_point.x.min(up_point.x),
+                        y: (down_point.y.min(up_point.y) - 12.0).max(0.0),
+                    };
+                    thread::sleep(Duration::from_millis(60));
+                    if let Some(toolbar_anchor) =
+                        capture_store_and_show_floating_button(app, toolbar_anchor)
+                    {
+                        *pending_selection = None;
+                        *visible_floating_button = Some(VisibleFloatingButton {
+                            anchor: toolbar_anchor,
+                        });
+                    } else {
+                        clear_selection_and_hide_button(app);
+                        *pending_selection = None;
+                        *visible_floating_button = None;
+                    }
+                } else if !in_assistant_window {
+                    // 不是有效 drag，清除选区
+                    clear_selection_and_hide_button(app);
+                    *pending_selection = None;
+                    *visible_floating_button = None;
+                }
+                // 在助手窗口内时，保持选区不变
+            }
         }
-        SelectionMouseUpEffect::PreserveSelection => {
-            *visible_floating_button = None;
-        }
+        MouseButtonEvent::Move(_) => {} // Move 事件在上面已处理
     }
 }
 
@@ -341,19 +373,18 @@ unsafe fn mouse_hook_point(l_param: LPARAM) -> Point {
     }
 }
 
-fn capture_store_and_show_floating_button(app: &tauri::AppHandle, anchor: Point) -> bool {
-    let Some(config) = current_config(app) else {
-        return false;
-    };
+fn capture_store_and_show_floating_button(app: &tauri::AppHandle, anchor: Point) -> Option<Point> {
+    let config = current_config(app)?;
 
-    if let Some(context) = read_current_selection_context(anchor, &config) {
-        app.state::<AppState>()
-            .store_latest_selection(context.clone());
-        emit_context_if_panel_visible(app, &context);
-        show_floating_button(app.clone(), anchor).is_ok()
-    } else {
-        false
-    }
+    let (context, source_window_handle) = read_current_selection_context(anchor, &config)?;
+    let toolbar_anchor = context.selection.toolbar_anchor_point();
+    let state = app.state::<AppState>();
+    state.store_latest_selection(context.clone());
+    state.store_latest_selection_window_handle(source_window_handle);
+    emit_context_if_panel_visible(app, &context);
+    show_floating_button(app.clone(), toolbar_anchor)
+        .map(|_| toolbar_anchor)
+        .ok()
 }
 
 fn capture_store_and_open_panel(app: &tauri::AppHandle, fallback_point: Point) {
@@ -362,11 +393,15 @@ fn capture_store_and_open_panel(app: &tauri::AppHandle, fallback_point: Point) {
         return;
     };
 
-    if let Some(context) = read_current_selection_context(fallback_point, &config) {
-        app.state::<AppState>()
-            .store_latest_selection(context.clone());
+    if let Some((context, source_window_handle)) =
+        read_current_selection_context(fallback_point, &config)
+    {
+        let state = app.state::<AppState>();
+        state.store_latest_selection(context.clone());
+        state.store_latest_selection_window_handle(source_window_handle);
         if let Ok(opened) = open_panel_for_context(app, context) {
-            app.state::<AppState>().store_latest_selection(opened);
+            state.store_latest_selection(opened);
+            state.store_latest_selection_window_handle(source_window_handle);
         }
     } else {
         clear_selection_and_hide_button(app);
@@ -391,21 +426,26 @@ fn emit_context_if_panel_visible(
 }
 
 fn assistant_window_rects(app: &tauri::AppHandle) -> Vec<Rect> {
-    ["floating-button", "ai-panel"]
-        .into_iter()
-        .filter_map(|label| app.get_webview_window(label))
-        .filter(|window| window.is_visible().unwrap_or(false))
-        .filter_map(|window| {
-            let position = window.outer_position().ok()?;
-            let size = window.outer_size().ok()?;
-            Some(Rect {
-                x: position.x as f64,
-                y: position.y as f64,
-                width: size.width as f64,
-                height: size.height as f64,
-            })
+    [
+        "floating-button",
+        "ai-panel",
+        "source-text",
+        "translate-result",
+    ]
+    .into_iter()
+    .filter_map(|label| app.get_webview_window(label))
+    .filter(|window| window.is_visible().unwrap_or(false))
+    .filter_map(|window| {
+        let position = window.outer_position().ok()?;
+        let size = window.outer_size().ok()?;
+        Some(Rect {
+            x: position.x as f64,
+            y: position.y as f64,
+            width: size.width as f64,
+            height: size.height as f64,
         })
-        .collect()
+    })
+    .collect()
 }
 
 fn current_config(app: &tauri::AppHandle) -> Option<AppConfig> {
@@ -419,8 +459,8 @@ fn current_config(app: &tauri::AppHandle) -> Option<AppConfig> {
 fn read_current_selection_context(
     fallback_point: Point,
     config: &AppConfig,
-) -> Option<crate::commands::selection::PanelContext> {
-    let window = foreground_window_info(config)?;
+) -> Option<(crate::commands::selection::PanelContext, isize)> {
+    let (window, source_window_handle) = foreground_window_info(config)?;
     let fallback_context = ClipboardFallbackContext {
         clipboard_fallback_enabled: config.clipboard_fallback_enabled,
         process_name: window.process_name.clone(),
@@ -441,7 +481,9 @@ fn read_current_selection_context(
         window.window_title,
         fallback_point,
     );
-    create_panel_context_for_selection(selection, false).ok()
+    create_panel_context_for_selection(selection, false)
+        .ok()
+        .map(|context| (context, source_window_handle))
 }
 
 fn key_down(vk: i32) -> bool {
@@ -461,7 +503,7 @@ fn cursor_point() -> Option<Point> {
     }
 }
 
-fn foreground_window_info(config: &AppConfig) -> Option<AppWindowInfo> {
+fn foreground_window_info(config: &AppConfig) -> Option<(AppWindowInfo, isize)> {
     let hwnd = unsafe { GetForegroundWindow() };
     if hwnd.is_null() {
         return None;
@@ -493,11 +535,14 @@ fn foreground_window_info(config: &AppConfig) -> Option<AppWindowInfo> {
         None => false,
     };
 
-    Some(AppWindowInfo {
-        process_name,
-        window_title: window_title(hwnd).unwrap_or_else(|| "Unknown window".to_string()),
-        elevated,
-    })
+    Some((
+        AppWindowInfo {
+            process_name,
+            window_title: window_title(hwnd).unwrap_or_else(|| "Unknown window".to_string()),
+            elevated,
+        },
+        hwnd as isize,
+    ))
 }
 
 fn process_name(process: *mut c_void) -> Option<String> {

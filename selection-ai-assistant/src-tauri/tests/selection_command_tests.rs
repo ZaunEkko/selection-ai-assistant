@@ -2,7 +2,7 @@ use selection_ai_assistant_lib::ai::action_classifier::AiAction;
 use selection_ai_assistant_lib::app_state::AppState;
 use selection_ai_assistant_lib::commands::selection::{
     create_panel_context_for_selection, create_panel_context_for_text,
-    panel_context_for_visible_refresh,
+    panel_context_for_visible_refresh, validate_replacement_selection,
 };
 use selection_ai_assistant_lib::config::AppConfig;
 use selection_ai_assistant_lib::selection::types::{SelectionCandidate, SelectionReadMethod};
@@ -70,6 +70,37 @@ fn storing_latest_selection_also_updates_latest_source_text() {
     state.store_latest_selection(context);
 
     assert_eq!(state.latest_source_text().as_deref(), Some("selected text"));
+}
+
+#[test]
+fn clears_latest_selection_window_handle_with_selection_context() {
+    let state = AppState::new(AppConfig::default());
+
+    state.store_latest_selection_window_handle(42);
+    assert_eq!(state.latest_selection_window_handle(), Some(42));
+
+    state.clear_latest_selection();
+
+    assert_eq!(state.latest_selection_window_handle(), None);
+}
+
+#[test]
+fn replacement_selection_validation_rejects_stale_selection_id() {
+    let state = AppState::new(AppConfig::default());
+    let selection = SelectionCandidate::from_clipboard_text(
+        "selected text".to_string(),
+        "unknown".to_string(),
+        "Unknown window".to_string(),
+        Point { x: 10.0, y: 20.0 },
+    );
+    let context = create_panel_context_for_selection(selection, false).unwrap();
+    let current_id = context.selection.id.clone();
+    state.store_latest_selection(context);
+
+    assert!(validate_replacement_selection(&state, Some(&current_id)).is_ok());
+    let err = validate_replacement_selection(&state, Some("old-selection")).unwrap_err();
+
+    assert_eq!(err.code, "selection_context_changed");
 }
 
 #[test]

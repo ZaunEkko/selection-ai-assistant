@@ -97,6 +97,49 @@ impl SelectionCandidate {
             .or_else(|| self.anchor_rect.map(|rect| rect.center()))
             .unwrap_or(self.fallback_point)
     }
+
+    pub fn toolbar_anchor_point(&self) -> Point {
+        toolbar_anchor_from_rects(&self.selection_rects, self.fallback_point)
+            .or(self.explicit_anchor)
+            .or_else(|| {
+                toolbar_anchor_from_rects(
+                    &self.anchor_rect.into_iter().collect::<Vec<_>>(),
+                    self.fallback_point,
+                )
+            })
+            .unwrap_or(self.fallback_point)
+    }
+}
+
+fn toolbar_anchor_from_rects(rects: &[Rect], fallback_point: Point) -> Option<Point> {
+    const TEXT_SPACE_MIN_HEIGHT: f64 = 48.0;
+    const ESTIMATED_TEXT_HALF_HEIGHT: f64 = 12.0;
+
+    if let Some(rect) = rects.iter().copied().filter(is_valid_rect).find(|rect| {
+        rect_contains_point(rect, fallback_point) && rect.height >= TEXT_SPACE_MIN_HEIGHT
+    }) {
+        return Some(Point {
+            x: rect.x,
+            y: (fallback_point.y - ESTIMATED_TEXT_HALF_HEIGHT).clamp(rect.y, rect.y + rect.height),
+        });
+    }
+
+    rects
+        .iter()
+        .copied()
+        .filter(is_valid_rect)
+        .next()
+        .map(|rect| Point {
+            x: rect.x,
+            y: rect.y,
+        })
+}
+
+fn rect_contains_point(rect: &Rect, point: Point) -> bool {
+    point.x >= rect.x
+        && point.x <= rect.x + rect.width
+        && point.y >= rect.y
+        && point.y <= rect.y + rect.height
 }
 
 pub fn weighted_rect_center(rects: &[Rect]) -> Option<Point> {
