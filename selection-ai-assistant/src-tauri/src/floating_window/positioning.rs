@@ -80,3 +80,19 @@ pub fn place_near_anchor(anchor: Point, size: WindowSize, screen: ScreenBounds) 
         y: preferred_y.clamp(min_y, max_y),
     }
 }
+
+pub fn place_toolbar_above_anchor(anchor: Point, size: WindowSize, screen: ScreenBounds) -> Point {
+    let gap = 8.0;
+    let min_x = screen.x;
+    let min_y = screen.y;
+    let max_x = (screen.x + screen.width - size.width).max(min_x);
+    let max_y = (screen.y + screen.height - size.height).max(min_y);
+
+    let preferred_x = anchor.x;
+    let above_y = anchor.y - size.height - gap;
+
+    Point {
+        x: preferred_x.clamp(min_x, max_x),
+        y: above_y.clamp(min_y, max_y),
+    }
+}

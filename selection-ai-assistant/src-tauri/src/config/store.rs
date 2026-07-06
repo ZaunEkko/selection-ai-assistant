@@ -62,9 +62,10 @@ impl Default for CloseButtonBehavior {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppBehaviorConfig {
+    pub hotkey: String,
     pub start_minimized_to_tray: bool,
     pub close_button_behavior: CloseButtonBehavior,
 }

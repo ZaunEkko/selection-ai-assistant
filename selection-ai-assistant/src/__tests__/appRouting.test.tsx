@@ -10,14 +10,22 @@ const {
   focusListeners,
   openPanelFromFloatingButtonMock,
   runAiActionMock,
+  showTranslateResultMock,
+  hideFloatingButtonMock,
+  replaceSelectedTextMock,
   hideSourceTextWindowMock,
+  getLatestPanelContextMock,
   getLatestSourceTextContextMock,
 } = vi.hoisted(() => ({
   listeners: new Map<string, Listener[]>(),
   focusListeners: [] as Listener<boolean>[],
   openPanelFromFloatingButtonMock: vi.fn(),
   runAiActionMock: vi.fn(),
+  showTranslateResultMock: vi.fn(),
+  hideFloatingButtonMock: vi.fn(),
+  replaceSelectedTextMock: vi.fn(),
   hideSourceTextWindowMock: vi.fn(),
+  getLatestPanelContextMock: vi.fn(),
   getLatestSourceTextContextMock: vi.fn(),
 }));
 
@@ -89,9 +97,12 @@ vi.mock('../api/tauri', () => ({
   startDragSourceTextWindow: vi.fn(),
   runAiAction: runAiActionMock,
   runAiFollowUp: vi.fn(),
-  getLatestPanelContext: vi.fn(() => Promise.resolve(null)),
+  getLatestPanelContext: getLatestPanelContextMock,
   getLatestSourceTextContext: getLatestSourceTextContextMock,
   openPanelFromFloatingButton: openPanelFromFloatingButtonMock,
+  showTranslateResult: showTranslateResultMock,
+  hideFloatingButton: hideFloatingButtonMock,
+  replaceSelectedText: replaceSelectedTextMock,
   formatCommandError: (err: unknown) => (err instanceof Error ? err.message : String(err)),
 }));
 
@@ -113,56 +124,154 @@ describe('App routing by Tauri window label', () => {
     listeners.clear();
     focusListeners.splice(0);
     runAiActionMock.mockReset();
+    showTranslateResultMock.mockReset();
+    hideFloatingButtonMock.mockReset();
+    replaceSelectedTextMock.mockReset();
     openPanelFromFloatingButtonMock.mockReset();
     hideSourceTextWindowMock.mockReset();
+    getLatestPanelContextMock.mockReset();
     getLatestSourceTextContextMock.mockReset();
     runAiActionMock.mockResolvedValue({ requestId: 'request-1' });
+    showTranslateResultMock.mockResolvedValue(undefined);
+    hideFloatingButtonMock.mockResolvedValue(undefined);
+    replaceSelectedTextMock.mockResolvedValue(undefined);
     openPanelFromFloatingButtonMock.mockResolvedValue(undefined);
     hideSourceTextWindowMock.mockResolvedValue(undefined);
+    getLatestPanelContextMock.mockResolvedValue(null);
     getLatestSourceTextContextMock.mockResolvedValue(null);
   });
 
-  it('renders floating button for the floating-button window', () => {
+  it('renders mini action bar for the floating-button window without requiring window position APIs', () => {
     currentLabel = 'floating-button';
 
     render(<App />);
 
-    expect(screen.getByRole('button', { name: '打开 AI 助手' })).toBeInTheDocument();
+    expect(screen.getByRole('toolbar', { name: '文本操作' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '翻译并替换文本' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '翻译文本' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '更多操作' })).toBeInTheDocument();
   });
 
-  it('renders floating button inside a transparent window root container', () => {
+  it('renders mini action bar inside a transparent window root container', () => {
     currentLabel = 'floating-button';
 
     render(<App />);
 
-    const button = screen.getByRole('button', { name: '打开 AI 助手' });
-    expect(button).toHaveClass('floating-ai-button');
-    expect(button.closest('.floating-button-window')).not.toBeNull();
+    const toolbar = screen.getByRole('toolbar', { name: '文本操作' });
+    expect(toolbar).toHaveClass('mini-action-bar');
+    expect(toolbar.closest('.mini-action-bar-window')).not.toBeNull();
   });
 
-  it('renders floating button as an icon-only accessible button without image assets', () => {
+  it('renders mini action bar without image assets', () => {
     currentLabel = 'floating-button';
 
     render(<App />);
 
-    const button = screen.getByRole('button', { name: '打开 AI 助手' });
-    expect(button).toHaveClass('floating-ai-button');
-    expect(button.closest('.floating-button-window')).not.toBeNull();
-    expect(button.querySelector('img')).toBeNull();
-    expect(button).not.toHaveTextContent('AI');
-
-    const svg = button.querySelector('svg.floating-ai-mark-icon');
-    expect(svg).not.toBeNull();
-    expect(svg?.closest('[aria-hidden="true"]')).not.toBeNull();
+    const toolbar = screen.getByRole('toolbar', { name: '文本操作' });
+    expect(toolbar.querySelector('img')).toBeNull();
   });
 
-  it('opens the panel when the floating button is clicked', async () => {
+  it('opens the full panel when more actions is clicked', async () => {
     currentLabel = 'floating-button';
 
     render(<App />);
-    fireEvent.click(screen.getByRole('button', { name: '打开 AI 助手' }));
+    fireEvent.click(screen.getByRole('button', { name: '更多操作' }));
 
     await waitFor(() => expect(openPanelFromFloatingButtonMock).toHaveBeenCalledTimes(1));
+  });
+
+  it('shows translate result when the translation stream completes immediately after request starts', async () => {
+    currentLabel = 'floating-button';
+    getLatestPanelContextMock.mockResolvedValue({
+      selection: {
+        text: 'hello world',
+        sourceApp: 'manual',
+        windowTitle: 'Manual hotkey',
+        fallbackPoint: { x: 320, y: 240 },
+      },
+      action: 'translateExplain',
+    });
+    runAiActionMock.mockImplementation(async (request: { requestId: string }) => {
+      emit('ai_stream_delta', { requestId: request.requestId, delta: '你好世界' });
+      emit('ai_stream_done', { requestId: request.requestId });
+      return { requestId: request.requestId };
+    });
+
+    render(<App />);
+    fireEvent.click(screen.getByRole('button', { name: '翻译文本' }));
+
+    await waitFor(() =>
+      expect(showTranslateResultMock).toHaveBeenCalledWith({ x: 320, y: 240 }, 'hello world', '你好世界'),
+    );
+  });
+
+  it('replaces the selected text with a translate-only stream when the replace stream completes immediately after request starts', async () => {
+    currentLabel = 'floating-button';
+    getLatestPanelContextMock.mockResolvedValue({
+      selection: {
+        id: 'selection-replace',
+        text: '你好世界',
+        sourceApp: 'manual',
+        windowTitle: 'Manual hotkey',
+        fallbackPoint: { x: 320, y: 240 },
+      },
+      action: 'translateExplain',
+    });
+    runAiActionMock.mockImplementation(async (request: { requestId: string }) => {
+      emit('ai_stream_delta', { requestId: request.requestId, delta: 'Hello world' });
+      emit('ai_stream_done', { requestId: request.requestId });
+      return { requestId: request.requestId };
+    });
+
+    render(<App />);
+    fireEvent.click(screen.getByRole('button', { name: '翻译并替换文本' }));
+
+    await waitFor(() => expect(replaceSelectedTextMock).toHaveBeenCalledWith('Hello world', 'selection-replace'));
+    expect(runAiActionMock).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'translateOnly', text: '你好世界', requestId: expect.stringMatching(/^replace-/) }),
+    );
+  });
+
+  it('does not replace selected text when the replace stream reports an error', async () => {
+    currentLabel = 'floating-button';
+    getLatestPanelContextMock.mockResolvedValue({
+      selection: {
+        text: '你好世界',
+        sourceApp: 'manual',
+        windowTitle: 'Manual hotkey',
+        fallbackPoint: { x: 320, y: 240 },
+      },
+      action: 'translateExplain',
+    });
+    runAiActionMock.mockImplementation(async (request: { requestId: string }) => {
+      emit('ai_stream_delta', { requestId: request.requestId, delta: 'partial' });
+      emit('ai_stream_error', { requestId: request.requestId, code: 'provider_stream_failed', message: 'failed' });
+      emit('ai_stream_done', { requestId: request.requestId });
+      return { requestId: request.requestId };
+    });
+
+    render(<App />);
+    fireEvent.click(screen.getByRole('button', { name: '翻译并替换文本' }));
+
+    await waitFor(() => expect(runAiActionMock).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(replaceSelectedTextMock).not.toHaveBeenCalled());
+  });
+
+  it('renders translate comparison window and displays pushed original and translated text', async () => {
+    currentLabel = 'translate-result';
+
+    render(<App />);
+    await waitFor(() => expect(listeners.has('translate_result')).toBe(true));
+
+    await act(async () => {
+      emit('translate_result', { originalText: 'hello world', translatedText: '你好世界' });
+    });
+
+    expect(screen.getByText('翻译对照')).toBeInTheDocument();
+    expect(screen.getByText('原文')).toBeInTheDocument();
+    expect(screen.getByText('hello world')).toBeInTheDocument();
+    expect(screen.getByText('译文')).toBeInTheDocument();
+    expect(screen.getByText('你好世界')).toBeInTheDocument();
   });
 
   it('renders AI panel for the ai-panel window', () => {

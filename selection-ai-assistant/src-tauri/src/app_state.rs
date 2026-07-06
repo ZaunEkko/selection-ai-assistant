@@ -6,6 +6,7 @@ pub struct AppState {
     pub config: Mutex<AppConfig>,
     pub settings_path: Option<PathBuf>,
     pub latest_selection: Mutex<Option<PanelContext>>,
+    latest_selection_window_handle: Mutex<Option<isize>>,
     latest_source_text: Mutex<Option<String>>,
 }
 
@@ -15,6 +16,7 @@ impl AppState {
             config: Mutex::new(config),
             settings_path: None,
             latest_selection: Mutex::new(None),
+            latest_selection_window_handle: Mutex::new(None),
             latest_source_text: Mutex::new(None),
         }
     }
@@ -24,6 +26,7 @@ impl AppState {
             config: Mutex::new(config),
             settings_path: Some(settings_path),
             latest_selection: Mutex::new(None),
+            latest_selection_window_handle: Mutex::new(None),
             latest_source_text: Mutex::new(None),
         }
     }
@@ -60,11 +63,29 @@ impl AppState {
             .clone()
     }
 
+    pub fn store_latest_selection_window_handle(&self, handle: isize) {
+        *self
+            .latest_selection_window_handle
+            .lock()
+            .expect("latest selection window handle mutex poisoned") = Some(handle);
+    }
+
+    pub fn latest_selection_window_handle(&self) -> Option<isize> {
+        *self
+            .latest_selection_window_handle
+            .lock()
+            .expect("latest selection window handle mutex poisoned")
+    }
+
     pub fn clear_latest_selection(&self) {
         *self
             .latest_selection
             .lock()
             .expect("latest selection mutex poisoned") = None;
+        *self
+            .latest_selection_window_handle
+            .lock()
+            .expect("latest selection window handle mutex poisoned") = None;
     }
 
     pub fn store_latest_source_text(&self, text: String) {

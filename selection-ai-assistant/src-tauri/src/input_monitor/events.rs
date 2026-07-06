@@ -2,6 +2,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::types::{Point, Rect};
 
+const ESTIMATED_TEXT_HALF_HEIGHT: f64 = 12.0;
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum InputEvent {
@@ -32,6 +34,31 @@ impl HotkeyKeyState {
 
     fn is_release_ready(&self) -> bool {
         !self.ctrl && !self.alt && !self.a
+    }
+}
+
+pub fn manual_hotkey_trigger_key(hotkey: &str) -> Option<char> {
+    let mut has_ctrl = false;
+    let mut has_alt = false;
+    let mut trigger = None;
+
+    for part in hotkey.split('+').map(|part| part.trim()) {
+        if part.eq_ignore_ascii_case("ctrl") || part.eq_ignore_ascii_case("control") {
+            has_ctrl = true;
+        } else if part.eq_ignore_ascii_case("alt") {
+            has_alt = true;
+        } else if part.len() == 1 {
+            let key = part.chars().next()?.to_ascii_uppercase();
+            if key.is_ascii_alphabetic() {
+                trigger = Some(key);
+            }
+        }
+    }
+
+    if has_ctrl && has_alt {
+        trigger
+    } else {
+        None
     }
 }
 
@@ -89,7 +116,10 @@ pub enum MouseButtonEvent {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum MouseUpAction {
-    ArmSelection { anchor: Point },
+    ArmSelection {
+        anchor: Point,
+        toolbar_anchor: Point,
+    },
     ClearSelection,
     PreserveSelection,
 }
@@ -97,6 +127,7 @@ pub enum MouseUpAction {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PendingSelection {
     pub anchor: Point,
+    pub toolbar_anchor: Point,
     pub hover_started_at_ms: Option<u64>,
 }
 
@@ -121,7 +152,7 @@ pub enum PendingSelectionHoverAction {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum SelectionMouseUpEffect {
-    PendingAnchorArmedAndClearSelectionAndHide,
+    ShowButtonAndClearPending,
     ClearSelectionAndHide,
     PreserveSelection,
 }
@@ -135,6 +166,7 @@ pub fn classify_mouse_up(
     if is_drag_distance_met(down, up, min_drag_distance) {
         MouseUpAction::ArmSelection {
             anchor: drag_anchor_point(down, up),
+            toolbar_anchor: drag_toolbar_anchor_point(down, up),
         }
     } else if assistant_windows
         .iter()
@@ -175,12 +207,9 @@ pub fn apply_mouse_up_action_to_pending_selection(
     action: MouseUpAction,
 ) -> SelectionMouseUpEffect {
     match action {
-        MouseUpAction::ArmSelection { anchor } => {
-            *pending_selection = Some(PendingSelection {
-                anchor,
-                hover_started_at_ms: None,
-            });
-            SelectionMouseUpEffect::PendingAnchorArmedAndClearSelectionAndHide
+        MouseUpAction::ArmSelection { .. } => {
+            *pending_selection = None;
+            SelectionMouseUpEffect::ShowButtonAndClearPending
         }
         MouseUpAction::ClearSelection => {
             *pending_selection = None;
@@ -229,7 +258,7 @@ pub fn hover_action_for_pending_selection(
     }
 
     PendingSelectionHoverAction::CaptureAndShowButton {
-        anchor: pending.anchor,
+        anchor: pending.toolbar_anchor,
     }
 }
 
@@ -237,15 +266,14 @@ pub fn visible_floating_button_action_when_idle(
     visible_button: &mut Option<VisibleFloatingButton>,
     drag_start: Option<&Point>,
     position: Point,
-    hover_radius: f64,
+    _hover_radius: f64,
     assistant_windows: &[Rect],
 ) -> VisibleFloatingButtonAction {
-    let Some(button) = visible_button.as_ref() else {
+    if visible_button.is_none() {
         return VisibleFloatingButtonAction::NoVisibleButton;
-    };
+    }
 
     if drag_start.is_some()
-        || !is_drag_distance_met(button.anchor, position, hover_radius)
         || assistant_windows
             .iter()
             .any(|window| rect_contains(*window, position))
@@ -253,9 +281,7 @@ pub fn visible_floating_button_action_when_idle(
         return VisibleFloatingButtonAction::KeepVisible;
     }
 
-    let anchor = button.anchor;
-    *visible_button = None;
-    VisibleFloatingButtonAction::HideAndRearmSelection { anchor }
+    VisibleFloatingButtonAction::KeepVisible
 }
 
 fn reset_hover_dwell(pending_selection: &mut Option<PendingSelection>) {
@@ -271,7 +297,14 @@ fn drag_anchor_point(down: Point, up: Point) -> Point {
     }
 }
 
-fn rect_contains(rect: Rect, point: Point) -> bool {
+fn drag_toolbar_anchor_point(down: Point, up: Point) -> Point {
+    Point {
+        x: down.x.min(up.x),
+        y: (down.y.min(up.y) - ESTIMATED_TEXT_HALF_HEIGHT).max(0.0),
+    }
+}
+
+pub fn rect_contains(rect: Rect, point: Point) -> bool {
     point.x >= rect.x
         && point.x <= rect.x + rect.width
         && point.y >= rect.y

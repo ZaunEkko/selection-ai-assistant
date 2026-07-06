@@ -2,7 +2,7 @@ use selection_ai_assistant_lib::config::AppConfig;
 use selection_ai_assistant_lib::input_monitor::events::{
     apply_mouse_up_action_to_pending_selection, classify_mouse_up, consume_pending_selection,
     handle_hotkey_state, handle_mouse_button_event, hover_action_for_pending_selection,
-    hover_action_for_pending_selection_when_idle, is_drag_distance_met,
+    hover_action_for_pending_selection_when_idle, is_drag_distance_met, manual_hotkey_trigger_key,
     visible_floating_button_action_when_idle, HotkeyAction, HotkeyKeyState, MouseButtonEvent,
     MouseUpAction, PendingHotkeyAction, PendingSelection, PendingSelectionHoverAction,
     SelectionMouseUpEffect, VisibleFloatingButton, VisibleFloatingButtonAction,
@@ -24,7 +24,23 @@ fn detects_drag_distance() {
 }
 
 #[test]
-fn mouse_up_after_drag_distance_arms_selection_at_drag_center_without_showing_button() {
+fn mouse_up_after_drag_distance_arms_selection_with_hover_center_and_toolbar_start() {
+    assert_eq!(
+        classify_mouse_up(
+            Point { x: 40.0, y: 80.0 },
+            Point { x: 400.0, y: 120.0 },
+            6.0,
+            &[],
+        ),
+        MouseUpAction::ArmSelection {
+            anchor: Point { x: 220.0, y: 100.0 },
+            toolbar_anchor: Point { x: 40.0, y: 68.0 },
+        }
+    );
+}
+
+#[test]
+fn mouse_up_after_drag_distance_arms_selection_at_drag_start_for_immediate_show() {
     assert_eq!(
         classify_mouse_up(
             Point { x: 0.0, y: 0.0 },
@@ -34,38 +50,32 @@ fn mouse_up_after_drag_distance_arms_selection_at_drag_center_without_showing_bu
         ),
         MouseUpAction::ArmSelection {
             anchor: Point { x: 5.0, y: 0.0 },
+            toolbar_anchor: Point { x: 0.0, y: 0.0 },
         }
     );
 }
 
 #[test]
-fn applying_drag_mouse_up_stores_pending_anchor_and_requests_old_button_hide() {
+fn applying_drag_mouse_up_clears_pending_anchor_and_requests_immediate_show() {
     let mut pending_selection = None;
 
     let effect = apply_mouse_up_action_to_pending_selection(
         &mut pending_selection,
         MouseUpAction::ArmSelection {
             anchor: Point { x: 5.0, y: 0.0 },
+            toolbar_anchor: Point { x: 5.0, y: 0.0 },
         },
     );
 
-    assert_eq!(
-        pending_selection,
-        Some(PendingSelection {
-            anchor: Point { x: 5.0, y: 0.0 },
-            hover_started_at_ms: None,
-        })
-    );
-    assert_eq!(
-        effect,
-        SelectionMouseUpEffect::PendingAnchorArmedAndClearSelectionAndHide
-    );
+    assert_eq!(pending_selection, None);
+    assert_eq!(effect, SelectionMouseUpEffect::ShowButtonAndClearPending);
 }
 
 #[test]
-fn applying_drag_mouse_up_replaces_old_pending_anchor_while_requesting_old_button_hide() {
+fn applying_drag_mouse_up_clears_old_pending_anchor_for_immediate_show() {
     let mut pending_selection = Some(PendingSelection {
         anchor: Point { x: 100.0, y: 100.0 },
+        toolbar_anchor: Point { x: 100.0, y: 100.0 },
         hover_started_at_ms: None,
     });
 
@@ -73,20 +83,12 @@ fn applying_drag_mouse_up_replaces_old_pending_anchor_while_requesting_old_butto
         &mut pending_selection,
         MouseUpAction::ArmSelection {
             anchor: Point { x: 5.0, y: 0.0 },
+            toolbar_anchor: Point { x: 5.0, y: 0.0 },
         },
     );
 
-    assert_eq!(
-        pending_selection,
-        Some(PendingSelection {
-            anchor: Point { x: 5.0, y: 0.0 },
-            hover_started_at_ms: None,
-        })
-    );
-    assert_eq!(
-        effect,
-        SelectionMouseUpEffect::PendingAnchorArmedAndClearSelectionAndHide
-    );
+    assert_eq!(pending_selection, None);
+    assert_eq!(effect, SelectionMouseUpEffect::ShowButtonAndClearPending);
 }
 
 #[test]
@@ -178,6 +180,7 @@ fn mouse_down_cancels_old_pending_selection_before_new_drag() {
     let mut down = None;
     let mut pending_selection = Some(PendingSelection {
         anchor: Point { x: 100.0, y: 100.0 },
+        toolbar_anchor: Point { x: 100.0, y: 100.0 },
         hover_started_at_ms: None,
     });
 
@@ -200,6 +203,7 @@ fn mouse_down_cancels_old_pending_selection_before_new_drag() {
 fn mouse_move_during_active_drag_never_hover_triggers_pending_selection() {
     let mut pending_selection = Some(PendingSelection {
         anchor: Point { x: 100.0, y: 100.0 },
+        toolbar_anchor: Point { x: 100.0, y: 100.0 },
         hover_started_at_ms: Some(900),
     });
     let drag_start = Some(Point { x: 20.0, y: 20.0 });
@@ -219,6 +223,7 @@ fn mouse_move_during_active_drag_never_hover_triggers_pending_selection() {
         pending_selection,
         Some(PendingSelection {
             anchor: Point { x: 100.0, y: 100.0 },
+            toolbar_anchor: Point { x: 100.0, y: 100.0 },
             hover_started_at_ms: None,
         })
     );
@@ -228,6 +233,7 @@ fn mouse_move_during_active_drag_never_hover_triggers_pending_selection() {
 fn mouse_move_after_drag_release_first_entering_hover_radius_shows_button() {
     let mut pending_selection = Some(PendingSelection {
         anchor: Point { x: 100.0, y: 100.0 },
+        toolbar_anchor: Point { x: 100.0, y: 100.0 },
         hover_started_at_ms: None,
     });
 
@@ -250,6 +256,7 @@ fn mouse_move_after_drag_release_first_entering_hover_radius_shows_button() {
 fn hotkey_pending_selection_can_be_consumed_before_opening_panel() {
     let mut pending_selection = Some(PendingSelection {
         anchor: Point { x: 100.0, y: 100.0 },
+        toolbar_anchor: Point { x: 100.0, y: 100.0 },
         hover_started_at_ms: None,
     });
 
@@ -257,11 +264,20 @@ fn hotkey_pending_selection_can_be_consumed_before_opening_panel() {
         pending_selection,
         Some(PendingSelection {
             anchor: Point { x: 100.0, y: 100.0 },
+            toolbar_anchor: Point { x: 100.0, y: 100.0 },
             hover_started_at_ms: None,
         })
     );
     consume_pending_selection(&mut pending_selection);
     assert_eq!(pending_selection, None);
+}
+
+#[test]
+fn parses_manual_ctrl_alt_letter_hotkey_from_config() {
+    assert_eq!(manual_hotkey_trigger_key("Ctrl+Alt+T"), Some('T'));
+    assert_eq!(manual_hotkey_trigger_key("ctrl + alt + k"), Some('K'));
+    assert_eq!(manual_hotkey_trigger_key("Ctrl+Shift+T"), None);
+    assert_eq!(manual_hotkey_trigger_key("Ctrl+Alt+Enter"), None);
 }
 
 #[test]
@@ -424,6 +440,7 @@ fn repeated_hotkey_release_does_not_capture_twice() {
 fn pending_selection_waits_until_explicit_mouse_move_near_anchor() {
     let mut pending_selection = Some(PendingSelection {
         anchor: Point { x: 100.0, y: 100.0 },
+        toolbar_anchor: Point { x: 100.0, y: 100.0 },
         hover_started_at_ms: None,
     });
 
@@ -441,6 +458,7 @@ fn pending_selection_waits_until_explicit_mouse_move_near_anchor() {
         pending_selection,
         Some(PendingSelection {
             anchor: Point { x: 100.0, y: 100.0 },
+            toolbar_anchor: Point { x: 100.0, y: 100.0 },
             hover_started_at_ms: None,
         })
     );
@@ -450,6 +468,7 @@ fn pending_selection_waits_until_explicit_mouse_move_near_anchor() {
 fn pending_selection_inside_hover_radius_shows_button_on_first_move() {
     let mut pending_selection = Some(PendingSelection {
         anchor: Point { x: 100.0, y: 100.0 },
+        toolbar_anchor: Point { x: 100.0, y: 100.0 },
         hover_started_at_ms: None,
     });
 
@@ -471,6 +490,7 @@ fn pending_selection_inside_hover_radius_shows_button_on_first_move() {
 fn pending_selection_inside_hover_radius_still_shows_button_after_delay() {
     let mut pending_selection = Some(PendingSelection {
         anchor: Point { x: 100.0, y: 100.0 },
+        toolbar_anchor: Point { x: 100.0, y: 100.0 },
         hover_started_at_ms: Some(1_000),
     });
 
@@ -492,6 +512,7 @@ fn pending_selection_inside_hover_radius_still_shows_button_after_delay() {
 fn pending_selection_leaving_hover_radius_resets_dwell() {
     let mut pending_selection = Some(PendingSelection {
         anchor: Point { x: 100.0, y: 100.0 },
+        toolbar_anchor: Point { x: 100.0, y: 100.0 },
         hover_started_at_ms: Some(1_000),
     });
 
@@ -509,6 +530,7 @@ fn pending_selection_leaving_hover_radius_resets_dwell() {
         pending_selection,
         Some(PendingSelection {
             anchor: Point { x: 100.0, y: 100.0 },
+            toolbar_anchor: Point { x: 100.0, y: 100.0 },
             hover_started_at_ms: None,
         })
     );
@@ -544,7 +566,7 @@ fn no_pending_selection_means_mouse_move_does_not_show_button() {
 }
 
 #[test]
-fn visible_floating_button_hides_after_mouse_leaves_hover_radius() {
+fn visible_floating_button_stays_visible_after_mouse_leaves_hover_radius() {
     let mut visible_button = Some(VisibleFloatingButton {
         anchor: Point { x: 100.0, y: 100.0 },
     });
@@ -557,17 +579,21 @@ fn visible_floating_button_hides_after_mouse_leaves_hover_radius() {
             90.0,
             &[],
         ),
-        VisibleFloatingButtonAction::HideAndRearmSelection {
-            anchor: Point { x: 100.0, y: 100.0 },
-        }
+        VisibleFloatingButtonAction::KeepVisible
     );
-    assert_eq!(visible_button, None);
+    assert_eq!(
+        visible_button,
+        Some(VisibleFloatingButton {
+            anchor: Point { x: 100.0, y: 100.0 },
+        })
+    );
 }
 
 #[test]
 fn hidden_floating_button_can_show_again_after_mouse_returns_to_hover_radius() {
     let mut pending_selection = Some(PendingSelection {
         anchor: Point { x: 100.0, y: 100.0 },
+        toolbar_anchor: Point { x: 100.0, y: 100.0 },
         hover_started_at_ms: None,
     });
 

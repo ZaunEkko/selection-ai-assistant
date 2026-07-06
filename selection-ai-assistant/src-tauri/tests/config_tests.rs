@@ -14,7 +14,7 @@ fn release_binary_uses_windows_subsystem_to_avoid_console_window() {
 }
 
 #[test]
-fn source_text_window_has_tauri_capability_permissions() {
+fn overlay_windows_have_tauri_capability_permissions() {
     let capabilities_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("capabilities")
         .join("default.json");
@@ -26,10 +26,12 @@ fn source_text_window_has_tauri_capability_permissions() {
         .as_array()
         .expect("capability windows should be an array");
 
-    assert!(
-        windows.iter().any(|window| window.as_str() == Some("source-text")),
-        "source-text window needs capability access to listen for source_text_context and invoke latest source recovery"
-    );
+    for label in ["source-text", "translate-result"] {
+        assert!(
+            windows.iter().any(|window| window.as_str() == Some(label)),
+            "{label} window needs capability access to listen for events and invoke window commands"
+        );
+    }
 }
 
 #[test]
