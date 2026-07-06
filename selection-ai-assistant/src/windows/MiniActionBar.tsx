@@ -17,6 +17,7 @@ type StreamDelta = { requestId: string; delta: string };
 type StreamDone = { requestId: string };
 type StreamError = { requestId: string; code: string; message: string };
 
+const AI_STREAM_TIMEOUT_MS = 45_000;
 const FALLBACK_TRANSLATE_RESULT_POSITION: Point = { x: 0, y: 0 };
 
 function isValidRect(rect: Rect): boolean {
@@ -27,16 +28,32 @@ function firstValidRect(rects: Rect[]): Rect | null {
   return rects.find(isValidRect) ?? null;
 }
 
+function rectContainsPoint(rect: Rect, point: Point): boolean {
+  return point.x >= rect.x && point.x <= rect.x + rect.width && point.y >= rect.y && point.y <= rect.y + rect.height;
+}
+
+function looksLikeTextSpace(rect: Rect, point?: Point | null): boolean {
+  return rect.width >= 240 && rect.height >= 48 && (!point || rectContainsPoint(rect, point));
+}
+
 function selectionAnchorPoint(selection: PanelContext['selection']): Point {
   const firstSelectionRect = firstValidRect(selection.selectionRects ?? []);
-  if (firstSelectionRect) {
+  const fallbackAnchor = selection.fallbackPoint ?? selection.explicitAnchor;
+
+  if (firstSelectionRect && !looksLikeTextSpace(firstSelectionRect, fallbackAnchor)) {
     return {
       x: firstSelectionRect.x,
       y: firstSelectionRect.y,
     };
   }
 
+  if (firstSelectionRect && looksLikeTextSpace(firstSelectionRect, fallbackAnchor) && selection.fallbackPoint) {
+    return selection.fallbackPoint;
+  }
+
   if (selection.explicitAnchor) return selection.explicitAnchor;
+
+  if (selection.fallbackPoint) return selection.fallbackPoint;
 
   if (selection.anchorRect && isValidRect(selection.anchorRect)) {
     return {
@@ -45,7 +62,19 @@ function selectionAnchorPoint(selection: PanelContext['selection']): Point {
     };
   }
 
-  return selection.fallbackPoint ?? FALLBACK_TRANSLATE_RESULT_POSITION;
+  return FALLBACK_TRANSLATE_RESULT_POSITION;
+}
+
+function selectionPlacementRects(selection: PanelContext['selection']): Rect[] {
+  const fallbackAnchor = selection.fallbackPoint ?? selection.explicitAnchor;
+  const selectionRects = (selection.selectionRects ?? []).filter(
+    (rect) => isValidRect(rect) && !looksLikeTextSpace(rect, fallbackAnchor),
+  );
+  if (selectionRects.length > 0) return selectionRects;
+  if (selection.anchorRect && isValidRect(selection.anchorRect) && !looksLikeTextSpace(selection.anchorRect, fallbackAnchor)) {
+    return [selection.anchorRect];
+  }
+  return [];
 }
 
 async function collectAiStream(request: { requestId: string; action: UiAction; text: string }): Promise<string> {
@@ -55,6 +84,12 @@ async function collectAiStream(request: { requestId: string; action: UiAction; t
   const done = new Promise<void>((resolve, reject) => {
     finishStream = resolve;
     failStream = reject;
+  });
+  let timeoutId: number | undefined;
+  const timeout = new Promise<void>((_resolve, reject) => {
+    timeoutId = window.setTimeout(() => {
+      reject(new Error('AI 服务商响应超时，请稍后重试。'));
+    }, AI_STREAM_TIMEOUT_MS);
   });
 
   const unlistenDelta = await listen<StreamDelta>('ai_stream_delta', (event) => {
@@ -75,9 +110,10 @@ async function collectAiStream(request: { requestId: string; action: UiAction; t
 
   try {
     await runAiAction(request);
-    await done;
+    await Promise.race([done, timeout]);
     return streamedText;
   } finally {
+    if (timeoutId !== undefined) window.clearTimeout(timeoutId);
     unlistenDelta();
     unlistenError();
     unlistenDone();
@@ -115,6 +151,9 @@ export function MiniActionBar() {
   async function handleTranslate() {
     if (isTranslating) return;
     setIsTranslating(true);
+    let anchor: Point | null = null;
+    let selectionRects: Rect[] = [];
+    let originalText = '';
 
     try {
       const context = await getLatestPanelContext();
@@ -123,14 +162,23 @@ export function MiniActionBar() {
         return;
       }
 
+      anchor = selectionAnchorPoint(context.selection);
+      selectionRects = selectionPlacementRects(context.selection);
+      originalText = context.selection.text;
+      await showTranslateResult(anchor, originalText, '', selectionRects);
+
       const translatedText = await collectAiStream({
         requestId: `translate-${Date.now()}`,
-        action: 'translateExplain',
-        text: context.selection.text,
+        action: 'translateOnly',
+        text: originalText,
       });
-      await showTranslateResult(selectionAnchorPoint(context.selection), context.selection.text, translatedText);
+      await showTranslateResult(anchor, originalText, translatedText, selectionRects);
     } catch (err) {
-      console.error('翻译失败:', formatCommandError(err));
+      const message = formatCommandError(err);
+      console.error('翻译失败:', message);
+      if (anchor && originalText) {
+        await showTranslateResult(anchor, originalText, `翻译失败：${message}`, selectionRects);
+      }
     } finally {
       setIsTranslating(false);
     }
@@ -150,7 +198,6 @@ export function MiniActionBar() {
           disabled={isReplacing}
           aria-label="翻译并替换文本"
         >
-          <span className="mini-action-icon" aria-hidden="true">🔄</span>
           <span className="mini-action-label">{isReplacing ? '翻译中…' : '替换'}</span>
         </button>
         <button
@@ -160,7 +207,6 @@ export function MiniActionBar() {
           disabled={isTranslating}
           aria-label="翻译文本"
         >
-          <span className="mini-action-icon" aria-hidden="true">📖</span>
           <span className="mini-action-label">{isTranslating ? '翻译中…' : '翻译'}</span>
         </button>
         <button
@@ -169,7 +215,6 @@ export function MiniActionBar() {
           onClick={() => void handleMore()}
           aria-label="更多操作"
         >
-          <span className="mini-action-icon" aria-hidden="true">⋯</span>
           <span className="mini-action-label">更多</span>
         </button>
       </div>

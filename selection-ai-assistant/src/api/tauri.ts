@@ -179,6 +179,24 @@ export function startDragSourceTextWindow(): Promise<void> {
   return getCurrentWindow().startDragging();
 }
 
+export function startDragTranslateResultWindow(): Promise<void> {
+  return getCurrentWindow().startDragging();
+}
+
+export type WindowResizeDirection =
+  | 'East'
+  | 'North'
+  | 'NorthEast'
+  | 'NorthWest'
+  | 'South'
+  | 'SouthEast'
+  | 'SouthWest'
+  | 'West';
+
+export function startResizeTranslateResultWindow(direction: WindowResizeDirection = 'SouthEast'): Promise<void> {
+  return getCurrentWindow().startResizeDragging(direction);
+}
+
 export function showAiPanel(position: Point): Promise<void> {
   return invoke<void>('show_ai_panel', { position });
 }
@@ -187,8 +205,17 @@ export function hideFloatingButton(): Promise<void> {
   return invoke<void>('hide_floating_button');
 }
 
-export function showTranslateResult(position: Point, originalText: string, translatedText: string): Promise<void> {
-  return invoke<void>('show_translate_result', { position, originalText, translatedText });
+export function showTranslateResult(
+  position: Point,
+  originalText: string,
+  translatedText: string,
+  selectionRects: Rect[] = [],
+): Promise<void> {
+  return invoke<void>('show_translate_result', { position, originalText, translatedText, selectionRects });
+}
+
+export function hideTranslateResult(): Promise<void> {
+  return invoke<void>('hide_translate_result');
 }
 
 export function replaceSelectedText(text: string, selectionId?: string): Promise<void> {

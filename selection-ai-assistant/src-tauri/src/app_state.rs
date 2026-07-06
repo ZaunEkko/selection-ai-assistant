@@ -1,12 +1,26 @@
 use std::{path::PathBuf, sync::Mutex};
 
-use crate::{commands::selection::PanelContext, config::AppConfig};
+use crate::{
+    commands::selection::PanelContext,
+    config::AppConfig,
+    types::{Point, Rect},
+};
+
+#[derive(Debug, Clone, Copy)]
+pub struct SelectionVisualState {
+    pub source_window_handle: isize,
+    pub color: (u8, u8, u8),
+    pub rect: Rect,
+}
 
 pub struct AppState {
     pub config: Mutex<AppConfig>,
     pub settings_path: Option<PathBuf>,
     pub latest_selection: Mutex<Option<PanelContext>>,
     latest_selection_window_handle: Mutex<Option<isize>>,
+    latest_selection_visual: Mutex<Option<SelectionVisualState>>,
+    latest_floating_button_window_position: Mutex<Option<Point>>,
+    scroll_follow_generation: Mutex<u64>,
     latest_source_text: Mutex<Option<String>>,
 }
 
@@ -17,6 +31,9 @@ impl AppState {
             settings_path: None,
             latest_selection: Mutex::new(None),
             latest_selection_window_handle: Mutex::new(None),
+            latest_selection_visual: Mutex::new(None),
+            latest_floating_button_window_position: Mutex::new(None),
+            scroll_follow_generation: Mutex::new(0),
             latest_source_text: Mutex::new(None),
         }
     }
@@ -27,6 +44,9 @@ impl AppState {
             settings_path: Some(settings_path),
             latest_selection: Mutex::new(None),
             latest_selection_window_handle: Mutex::new(None),
+            latest_selection_visual: Mutex::new(None),
+            latest_floating_button_window_position: Mutex::new(None),
+            scroll_follow_generation: Mutex::new(0),
             latest_source_text: Mutex::new(None),
         }
     }
@@ -77,6 +97,64 @@ impl AppState {
             .expect("latest selection window handle mutex poisoned")
     }
 
+    pub fn store_latest_selection_visual(&self, visual: SelectionVisualState) {
+        *self
+            .latest_selection_visual
+            .lock()
+            .expect("latest selection visual mutex poisoned") = Some(visual);
+    }
+
+    pub fn latest_selection_visual(&self) -> Option<SelectionVisualState> {
+        *self
+            .latest_selection_visual
+            .lock()
+            .expect("latest selection visual mutex poisoned")
+    }
+
+    pub fn clear_latest_selection_visual(&self) {
+        *self
+            .latest_selection_visual
+            .lock()
+            .expect("latest selection visual mutex poisoned") = None;
+    }
+
+    pub fn store_latest_floating_button_window_position(&self, position: Point) {
+        *self
+            .latest_floating_button_window_position
+            .lock()
+            .expect("latest floating button window position mutex poisoned") = Some(position);
+    }
+
+    pub fn latest_floating_button_window_position(&self) -> Option<Point> {
+        *self
+            .latest_floating_button_window_position
+            .lock()
+            .expect("latest floating button window position mutex poisoned")
+    }
+
+    pub fn clear_latest_floating_button_window_position(&self) {
+        *self
+            .latest_floating_button_window_position
+            .lock()
+            .expect("latest floating button window position mutex poisoned") = None;
+    }
+
+    pub fn next_scroll_follow_generation(&self) -> u64 {
+        let mut generation = self
+            .scroll_follow_generation
+            .lock()
+            .expect("scroll follow generation mutex poisoned");
+        *generation = generation.saturating_add(1);
+        *generation
+    }
+
+    pub fn scroll_follow_generation(&self) -> u64 {
+        *self
+            .scroll_follow_generation
+            .lock()
+            .expect("scroll follow generation mutex poisoned")
+    }
+
     pub fn clear_latest_selection(&self) {
         *self
             .latest_selection
@@ -86,6 +164,8 @@ impl AppState {
             .latest_selection_window_handle
             .lock()
             .expect("latest selection window handle mutex poisoned") = None;
+        self.clear_latest_selection_visual();
+        self.clear_latest_floating_button_window_position();
     }
 
     pub fn store_latest_source_text(&self, text: String) {
