@@ -3,9 +3,10 @@ use selection_ai_assistant_lib::input_monitor::events::{
     apply_mouse_up_action_to_pending_selection, classify_mouse_up, consume_pending_selection,
     handle_hotkey_state, handle_mouse_button_event, hover_action_for_pending_selection,
     hover_action_for_pending_selection_when_idle, is_drag_distance_met, manual_hotkey_trigger_key,
-    visible_floating_button_action_when_idle, HotkeyAction, HotkeyKeyState, MouseButtonEvent,
-    MouseUpAction, PendingHotkeyAction, PendingSelection, PendingSelectionHoverAction,
-    SelectionMouseUpEffect, VisibleFloatingButton, VisibleFloatingButtonAction,
+    should_follow_scroll_for_source, visible_floating_button_action_when_idle, HotkeyAction,
+    HotkeyKeyState, MouseButtonEvent, MouseUpAction, PendingHotkeyAction, PendingSelection,
+    PendingSelectionHoverAction, SelectionMouseUpEffect, VisibleFloatingButton,
+    VisibleFloatingButtonAction,
 };
 use selection_ai_assistant_lib::types::{Point, Rect};
 
@@ -571,6 +572,7 @@ fn visible_floating_button_stays_visible_after_mouse_leaves_hover_radius() {
         window_position: Point { x: 100.0, y: 100.0 },
         selection_anchor: Point { x: 100.0, y: 100.0 },
         selection_rect: None,
+        scroll_follow_enabled: true,
     });
 
     assert_eq!(
@@ -589,6 +591,7 @@ fn visible_floating_button_stays_visible_after_mouse_leaves_hover_radius() {
             window_position: Point { x: 100.0, y: 100.0 },
             selection_anchor: Point { x: 100.0, y: 100.0 },
             selection_rect: None,
+            scroll_follow_enabled: true,
         })
     );
 }
@@ -622,6 +625,7 @@ fn visible_floating_button_stays_visible_when_mouse_is_on_assistant_ui() {
         window_position: Point { x: 100.0, y: 100.0 },
         selection_anchor: Point { x: 100.0, y: 100.0 },
         selection_rect: None,
+        scroll_follow_enabled: true,
     });
     let assistant_windows = [Rect {
         x: 112.0,
@@ -646,8 +650,37 @@ fn visible_floating_button_stays_visible_when_mouse_is_on_assistant_ui() {
             window_position: Point { x: 100.0, y: 100.0 },
             selection_anchor: Point { x: 100.0, y: 100.0 },
             selection_rect: None,
+            scroll_follow_enabled: true,
         })
     );
+}
+
+#[test]
+fn browser_source_disables_scroll_follow_for_fixed_desktop_compromise() {
+    assert!(!should_follow_scroll_for_source(
+        "chrome.exe",
+        "Docs - Google Chrome"
+    ));
+    assert!(!should_follow_scroll_for_source(
+        "msedge.exe",
+        "Microsoft Edge"
+    ));
+    assert!(!should_follow_scroll_for_source(
+        "firefox.exe",
+        "Mozilla Firefox"
+    ));
+}
+
+#[test]
+fn non_browser_source_keeps_scroll_follow_enabled() {
+    assert!(should_follow_scroll_for_source(
+        "notepad.exe",
+        "note.txt - Notepad"
+    ));
+    assert!(should_follow_scroll_for_source(
+        "WINWORD.EXE",
+        "Document1 - Word"
+    ));
 }
 
 #[test]

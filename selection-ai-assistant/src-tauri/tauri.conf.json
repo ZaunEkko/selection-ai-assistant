@@ -32,6 +32,18 @@
         "skipTaskbar": true
       },
       {
+        "label": "replacement-preset",
+        "title": "Replacement Preset",
+        "width": 260,
+        "height": 92,
+        "decorations": false,
+        "transparent": true,
+        "shadow": false,
+        "alwaysOnTop": true,
+        "visible": false,
+        "skipTaskbar": true
+      },
+      {
         "label": "ai-panel",
         "title": "AI Assistant",
         "width": 520,

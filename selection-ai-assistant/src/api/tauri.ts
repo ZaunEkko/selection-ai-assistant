@@ -15,11 +15,14 @@ export type AiProviderConfig = {
 };
 
 export type CloseButtonBehavior = 'ask' | 'minimizeToTray' | 'exitApp';
+export type ReplacementTargetLanguage = 'auto' | 'chinese' | 'english' | 'japanese' | 'korean' | 'custom';
 
 export type AppBehaviorConfig = {
   hotkey: string;
   startMinimizedToTray: boolean;
   closeButtonBehavior: CloseButtonBehavior;
+  replacementTargetLanguage: ReplacementTargetLanguage;
+  replacementCustomTarget: string;
 };
 
 export type AppConfig = {
@@ -36,6 +39,8 @@ export type AppConfig = {
   manualHotkeyAlwaysEnabled: boolean;
   startMinimizedToTray: boolean;
   closeButtonBehavior: CloseButtonBehavior;
+  replacementTargetLanguage: ReplacementTargetLanguage;
+  replacementCustomTarget: string;
   disabledApps: string[];
 };
 
@@ -134,7 +139,12 @@ export type PanelContext = {
   autoRun?: boolean;
 };
 
-export function runAiAction(request: { requestId: string; action: UiAction; text: string }): Promise<{ requestId: string }> {
+export function runAiAction(request: {
+  requestId: string;
+  action: UiAction;
+  text: string;
+  targetLanguage?: string;
+}): Promise<{ requestId: string }> {
   return invoke<{ requestId: string }>('run_ai_action', { request });
 }
 
@@ -203,6 +213,14 @@ export function showAiPanel(position: Point): Promise<void> {
 
 export function hideFloatingButton(): Promise<void> {
   return invoke<void>('hide_floating_button');
+}
+
+export function showReplacementPresetPanel(): Promise<void> {
+  return invoke<void>('show_replacement_preset_panel');
+}
+
+export function hideReplacementPresetPanel(): Promise<void> {
+  return invoke<void>('hide_replacement_preset_panel');
 }
 
 export function showTranslateResult(

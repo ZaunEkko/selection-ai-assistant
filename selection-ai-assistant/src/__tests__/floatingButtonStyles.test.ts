@@ -19,19 +19,29 @@ describe('floating button styles', () => {
     expect(css).not.toMatch(/\.floating-ai-button[\s\S]*box-shadow:\s*\n\s*0\s+2px\s+8px/);
   });
 
-  it('keeps the Tauri floating window large enough for the horizontal pill action bar', () => {
+  it('keeps the mini action bar in a small floating window and moves replacement preset into its own window', () => {
     const css = readFileSync(resolve(__dirname, '../styles.css'), 'utf8');
     const tauriConfig = JSON.parse(readFileSync(resolve(__dirname, '../../src-tauri/tauri.conf.json'), 'utf8'));
     const panelRs = readFileSync(resolve(__dirname, '../../src-tauri/src/commands/panel.rs'), 'utf8');
+    const capabilities = JSON.parse(readFileSync(resolve(__dirname, '../../src-tauri/capabilities/default.json'), 'utf8'));
 
     const floatingWindow = tauriConfig.app.windows.find((window: { label?: string }) => window.label === 'floating-button');
+    const replacementPresetWindow = tauriConfig.app.windows.find((window: { label?: string }) => window.label === 'replacement-preset');
 
     expect(floatingWindow).toMatchObject({ width: 244, height: 44, shadow: false });
+    expect(replacementPresetWindow).toMatchObject({ width: 260, height: 92, shadow: false, transparent: true });
+    expect(capabilities.windows).toContain('replacement-preset');
+    expect(css).toMatch(/\.mini-action-bar-window[\s\S]*place-items:\s*start\s+start/);
+    expect(css).toMatch(/\.replacement-preset-window[\s\S]*place-items:\s*start\s+start/);
+    expect(css).toMatch(/\.replacement-preset-panel[\s\S]*width:\s*254px/);
     expect(css).toMatch(/\.mini-action-bar[\s\S]*min-width:\s*228px/);
     expect(css).toMatch(/\.mini-action-bar[\s\S]*min-height:\s*34px/);
     expect(css).toMatch(/\.mini-action-button[\s\S]*padding:\s*6px\s+11px/);
     expect(panelRs).toMatch(
       /const\s+FLOATING_BUTTON_SIZE:\s*WindowSize\s*=\s*WindowSize\s*\{[\s\S]*width:\s*244\.0,[\s\S]*height:\s*44\.0,[\s\S]*\}/,
+    );
+    expect(panelRs).toMatch(
+      /const\s+REPLACEMENT_PRESET_SIZE:\s*WindowSize\s*=\s*WindowSize\s*\{[\s\S]*width:\s*260\.0,[\s\S]*height:\s*92\.0,[\s\S]*\}/,
     );
   });
 
