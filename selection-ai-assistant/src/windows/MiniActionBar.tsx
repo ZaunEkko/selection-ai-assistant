@@ -1,4 +1,4 @@
-import { listen } from '@tauri-apps/api/event';
+import { listen, emit } from '@tauri-apps/api/event';
 import { useRef, useState } from 'react';
 import {
   formatCommandError,
@@ -107,6 +107,7 @@ async function collectAiStream(request: {
   action: UiAction;
   text: string;
   targetLanguage?: string;
+  onDelta?: (delta: string) => void;
 }): Promise<string> {
   let streamedText = '';
   let finishStream: (() => void) | null = null;
@@ -125,6 +126,7 @@ async function collectAiStream(request: {
   const unlistenDelta = await listen<StreamDelta>('ai_stream_delta', (event) => {
     if (event.payload.requestId === request.requestId) {
       streamedText += event.payload.delta;
+      request.onDelta?.(event.payload.delta);
     }
   });
   const unlistenError = await listen<StreamError>('ai_stream_error', (event) => {
@@ -153,9 +155,19 @@ async function collectAiStream(request: {
 export function MiniActionBar() {
   const [isTranslating, setIsTranslating] = useState(false);
   const [isReplacing, setIsReplacing] = useState(false);
+  const [replaceError, setReplaceError] = useState<string | null>(null);
   const presetVisibilityTokenRef = useRef(0);
+  const openPresetTimeoutRef = useRef<number | null>(null);
+
+  function clearPresetTimeout() {
+    if (openPresetTimeoutRef.current !== null) {
+      window.clearTimeout(openPresetTimeoutRef.current);
+      openPresetTimeoutRef.current = null;
+    }
+  }
 
   async function closeReplacementPresetPanel() {
+    clearPresetTimeout();
     presetVisibilityTokenRef.current += 1;
     try {
       await hideReplacementPresetPanel();
@@ -186,7 +198,10 @@ export function MiniActionBar() {
       });
       await replaceSelectedText(translatedText, context.selection.id);
     } catch (err) {
-      console.error('替换失败:', formatCommandError(err));
+      const message = formatCommandError(err);
+      console.error('替换失败:', message);
+      setReplaceError(message);
+      setTimeout(() => setReplaceError(null), 3000);
     } finally {
       setIsReplacing(false);
     }
@@ -216,6 +231,9 @@ export function MiniActionBar() {
         requestId: `translate-${Date.now()}`,
         action: 'translateOnly',
         text: originalText,
+        onDelta: (delta) => {
+          void emit('translate_result_delta', { delta });
+        },
       });
       await showTranslateResult(anchor, originalText, translatedText, selectionRects);
     } catch (err) {
@@ -246,14 +264,27 @@ export function MiniActionBar() {
       .catch((err: unknown) => console.error('打开替换目标面板失败:', formatCommandError(err)));
   }
 
+  function handleReplaceMouseEnter() {
+    clearPresetTimeout();
+    openPresetTimeoutRef.current = window.setTimeout(() => {
+      openReplacementPresetPanel();
+    }, 150);
+  }
+
+  function handleReplaceMouseLeave() {
+    clearPresetTimeout();
+  }
+
   return (
     <div className="mini-action-bar-window">
-      <div className="mini-action-bar" role="toolbar" aria-label="文本操作">
+      <div className="mini-action-bar" role="toolbar" aria-label="文本操作" style={{ position: 'relative' }}>
         <button
           className="mini-action-button mini-action-button--replace"
           type="button"
-          onMouseEnter={openReplacementPresetPanel}
-          onFocus={openReplacementPresetPanel}
+          onMouseEnter={handleReplaceMouseEnter}
+          onMouseLeave={handleReplaceMouseLeave}
+          onFocus={handleReplaceMouseEnter}
+          onBlur={handleReplaceMouseLeave}
           onClick={() => void handleReplace()}
           disabled={isReplacing}
           aria-label="翻译并替换文本"
@@ -277,6 +308,11 @@ export function MiniActionBar() {
         >
           <span className="mini-action-label">更多</span>
         </button>
+        {replaceError && (
+          <div className="mini-action-error" style={{ position: 'absolute', top: '100%', left: '50%', transform: 'translateX(-50%)', marginTop: '8px', padding: '6px 12px', background: 'var(--macos-red)', color: 'white', borderRadius: '6px', fontSize: '12px', whiteSpace: 'nowrap', boxShadow: 'var(--macos-shadow-md)', pointerEvents: 'none', zIndex: 10 }}>
+            {replaceError}
+          </div>
+        )}
       </div>
     </div>
   );

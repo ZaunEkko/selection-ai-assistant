@@ -12,6 +12,10 @@ type TranslateResultEvent = {
   translatedText: string;
 };
 
+type TranslateResultDeltaEvent = {
+  delta: string;
+};
+
 export function TranslateResult() {
   const [translatedText, setTranslatedText] = useState<string>('');
   const [error, setError] = useState<string | null>(null);
@@ -35,9 +39,25 @@ export function TranslateResult() {
       })
       .catch((err) => setError(formatCommandError(err)));
 
+    let unlistenDelta: (() => void) | null = null;
+    listen<TranslateResultDeltaEvent>('translate_result_delta', (event) => {
+      if (active) {
+        setTranslatedText((prev) => prev + event.payload.delta);
+      }
+    })
+      .then((nextUnlisten) => {
+        if (active) {
+          unlistenDelta = nextUnlisten;
+        } else {
+          nextUnlisten();
+        }
+      })
+      .catch((err) => console.error('Failed to listen to delta:', err));
+
     return () => {
       active = false;
       unlisten?.();
+      unlistenDelta?.();
     };
   }, []);
 
