@@ -5,6 +5,7 @@ use selection_ai_assistant_lib::commands::config::{
 use selection_ai_assistant_lib::commands::selection::validate_replacement_text;
 use selection_ai_assistant_lib::config::{
     AiProviderConfig, AiProviderKind, AppBehaviorConfig, AppConfig, CloseButtonBehavior,
+    ReplacementTargetLanguage,
 };
 
 fn provider(id: &str, base_url: &str, model: &str) -> AiProviderConfig {
@@ -36,6 +37,8 @@ fn save_app_behavior_config_updates_startup_and_close_preferences() {
             hotkey: "Ctrl+Alt+T".to_string(),
             start_minimized_to_tray: true,
             close_button_behavior: CloseButtonBehavior::ExitApp,
+            replacement_target_language: ReplacementTargetLanguage::Korean,
+            replacement_custom_target: "韩语敬语".to_string(),
         },
     )
     .expect("app behavior config should save");
@@ -43,11 +46,21 @@ fn save_app_behavior_config_updates_startup_and_close_preferences() {
     assert_eq!(config.hotkey, "Ctrl+Alt+T");
     assert!(config.start_minimized_to_tray);
     assert_eq!(config.close_button_behavior, CloseButtonBehavior::ExitApp);
+    assert_eq!(
+        config.replacement_target_language,
+        ReplacementTargetLanguage::Korean
+    );
+    assert_eq!(config.replacement_custom_target, "韩语敬语");
 
     let stored = get_config_from_state(&state).expect("config should be readable");
     assert_eq!(stored.hotkey, "Ctrl+Alt+T");
     assert!(stored.start_minimized_to_tray);
     assert_eq!(stored.close_button_behavior, CloseButtonBehavior::ExitApp);
+    assert_eq!(
+        stored.replacement_target_language,
+        ReplacementTargetLanguage::Korean
+    );
+    assert_eq!(stored.replacement_custom_target, "韩语敬语");
 }
 
 #[test]
@@ -62,6 +75,8 @@ fn save_app_behavior_config_persists_to_settings_file() {
             hotkey: "Ctrl+Alt+K".to_string(),
             start_minimized_to_tray: true,
             close_button_behavior: CloseButtonBehavior::MinimizeToTray,
+            replacement_target_language: ReplacementTargetLanguage::Custom,
+            replacement_custom_target: "日文自然口语".to_string(),
         },
     )
     .expect("app behavior config should save");
@@ -73,6 +88,11 @@ fn save_app_behavior_config_persists_to_settings_file() {
         loaded.close_button_behavior,
         CloseButtonBehavior::MinimizeToTray
     );
+    assert_eq!(
+        loaded.replacement_target_language,
+        ReplacementTargetLanguage::Custom
+    );
+    assert_eq!(loaded.replacement_custom_target, "日文自然口语");
 }
 
 #[test]

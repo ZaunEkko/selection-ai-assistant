@@ -26,6 +26,8 @@ const defaultAppBehavior: AppBehaviorConfig = {
   hotkey: 'Ctrl+Alt+A',
   startMinimizedToTray: false,
   closeButtonBehavior: 'ask',
+  replacementTargetLanguage: 'auto',
+  replacementCustomTarget: '',
 };
 
 function platformLabel(platform: PlatformCapabilities['platform']) {
@@ -103,6 +105,8 @@ export function Settings() {
           hotkey: loadedConfig.hotkey,
           startMinimizedToTray: loadedConfig.startMinimizedToTray,
           closeButtonBehavior: loadedConfig.closeButtonBehavior,
+          replacementTargetLanguage: loadedConfig.replacementTargetLanguage,
+          replacementCustomTarget: loadedConfig.replacementCustomTarget,
         });
       })
       .catch((err) => setError(formatCommandError(err)));
@@ -172,6 +176,8 @@ export function Settings() {
         hotkey: next.hotkey,
         startMinimizedToTray: next.startMinimizedToTray,
         closeButtonBehavior: next.closeButtonBehavior,
+        replacementTargetLanguage: next.replacementTargetLanguage,
+        replacementCustomTarget: next.replacementCustomTarget,
       });
       setBehaviorFeedback({ kind: 'status', message: '已保存启动、关闭与快捷键设置。' });
     } catch (err) {
@@ -191,6 +197,8 @@ export function Settings() {
         hotkey: next.hotkey,
         startMinimizedToTray: next.startMinimizedToTray,
         closeButtonBehavior: next.closeButtonBehavior,
+        replacementTargetLanguage: next.replacementTargetLanguage,
+        replacementCustomTarget: next.replacementCustomTarget,
       });
     } catch (err) {
       setError(formatCommandError(err));

@@ -1,12 +1,16 @@
 import { listen } from '@tauri-apps/api/event';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import {
   formatCommandError,
+  getConfig,
   getLatestPanelContext,
+  hideReplacementPresetPanel,
   openPanelFromFloatingButton,
   replaceSelectedText,
   runAiAction,
+  showReplacementPresetPanel,
   showTranslateResult,
+  type AppBehaviorConfig,
   type PanelContext,
   type Point,
   type Rect,
@@ -17,8 +21,21 @@ type StreamDelta = { requestId: string; delta: string };
 type StreamDone = { requestId: string };
 type StreamError = { requestId: string; code: string; message: string };
 
+type ReplacementOption = {
+  value: AppBehaviorConfig['replacementTargetLanguage'];
+  targetLanguage?: string;
+};
+
 const AI_STREAM_TIMEOUT_MS = 45_000;
 const FALLBACK_TRANSLATE_RESULT_POSITION: Point = { x: 0, y: 0 };
+const REPLACEMENT_OPTIONS: ReplacementOption[] = [
+  { value: 'auto' },
+  { value: 'chinese', targetLanguage: '中文' },
+  { value: 'english', targetLanguage: '英文' },
+  { value: 'japanese', targetLanguage: '日文' },
+  { value: 'korean', targetLanguage: '韩文' },
+  { value: 'custom' },
+];
 
 function isValidRect(rect: Rect): boolean {
   return rect.width > 0 && rect.height > 0;
@@ -77,7 +94,20 @@ function selectionPlacementRects(selection: PanelContext['selection']): Rect[] {
   return [];
 }
 
-async function collectAiStream(request: { requestId: string; action: UiAction; text: string }): Promise<string> {
+function replacementTargetLanguage(behavior: AppBehaviorConfig): string | undefined {
+  if (behavior.replacementTargetLanguage === 'custom') {
+    return behavior.replacementCustomTarget.trim() || undefined;
+  }
+
+  return REPLACEMENT_OPTIONS.find((option) => option.value === behavior.replacementTargetLanguage)?.targetLanguage;
+}
+
+async function collectAiStream(request: {
+  requestId: string;
+  action: UiAction;
+  text: string;
+  targetLanguage?: string;
+}): Promise<string> {
   let streamedText = '';
   let finishStream: (() => void) | null = null;
   let failStream: ((error: Error) => void) | null = null;
@@ -123,22 +153,36 @@ async function collectAiStream(request: { requestId: string; action: UiAction; t
 export function MiniActionBar() {
   const [isTranslating, setIsTranslating] = useState(false);
   const [isReplacing, setIsReplacing] = useState(false);
+  const presetVisibilityTokenRef = useRef(0);
+
+  async function closeReplacementPresetPanel() {
+    presetVisibilityTokenRef.current += 1;
+    try {
+      await hideReplacementPresetPanel();
+    } catch (err) {
+      console.error('关闭替换目标面板失败:', formatCommandError(err));
+    }
+  }
 
   async function handleReplace() {
     if (isReplacing) return;
     setIsReplacing(true);
 
     try {
+      await closeReplacementPresetPanel();
       const context = await getLatestPanelContext();
       if (!context?.selection?.text) {
         console.error('没有选区文本');
         return;
       }
 
+      const config = await getConfig();
+      const targetLanguage = replacementTargetLanguage(config);
       const translatedText = await collectAiStream({
         requestId: `replace-${Date.now()}`,
         action: 'translateOnly',
         text: context.selection.text,
+        ...(targetLanguage ? { targetLanguage } : {}),
       });
       await replaceSelectedText(translatedText, context.selection.id);
     } catch (err) {
@@ -156,6 +200,7 @@ export function MiniActionBar() {
     let originalText = '';
 
     try {
+      await closeReplacementPresetPanel();
       const context = await getLatestPanelContext();
       if (!context?.selection?.text) {
         console.error('没有选区文本');
@@ -185,7 +230,20 @@ export function MiniActionBar() {
   }
 
   async function handleMore() {
+    await closeReplacementPresetPanel();
     await openPanelFromFloatingButton();
+  }
+
+  function openReplacementPresetPanel() {
+    const token = presetVisibilityTokenRef.current + 1;
+    presetVisibilityTokenRef.current = token;
+    void showReplacementPresetPanel()
+      .then(() => {
+        if (presetVisibilityTokenRef.current !== token) {
+          return closeReplacementPresetPanel();
+        }
+      })
+      .catch((err: unknown) => console.error('打开替换目标面板失败:', formatCommandError(err)));
   }
 
   return (
@@ -194,11 +252,13 @@ export function MiniActionBar() {
         <button
           className="mini-action-button mini-action-button--replace"
           type="button"
+          onMouseEnter={openReplacementPresetPanel}
+          onFocus={openReplacementPresetPanel}
           onClick={() => void handleReplace()}
           disabled={isReplacing}
           aria-label="翻译并替换文本"
         >
-          <span className="mini-action-label">{isReplacing ? '翻译中…' : '替换'}</span>
+          <span className="mini-action-label">{isReplacing ? '替换中…' : '替换'}</span>
         </button>
         <button
           className="mini-action-button mini-action-button--translate"

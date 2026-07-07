@@ -1,6 +1,6 @@
 use selection_ai_assistant_lib::ai::action_classifier::AiAction;
 use selection_ai_assistant_lib::commands::ai::{
-    build_follow_up_prompt_messages, build_prompt_messages,
+    build_follow_up_prompt_messages, build_prompt_messages, build_prompt_messages_with_target,
 };
 
 #[test]
@@ -25,6 +25,17 @@ fn builds_translate_only_prompt_without_explanations() {
 
     assert!(messages[1].content.contains("只输出译文"));
     assert!(messages[1].content.contains("不要解释"));
+    assert!(messages[1].content.contains("你好世界"));
+}
+
+#[test]
+fn builds_translate_only_prompt_with_explicit_target_language() {
+    let messages =
+        build_prompt_messages_with_target(AiAction::TranslateOnly, "你好世界", Some("韩文"));
+
+    assert!(messages[1].content.contains("翻译成韩文"));
+    assert!(messages[1].content.contains("严格使用目标语言：韩文"));
+    assert!(messages[1].content.contains("不要根据原文语言自动切换"));
     assert!(messages[1].content.contains("你好世界"));
 }
 
