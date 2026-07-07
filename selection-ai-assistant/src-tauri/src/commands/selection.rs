@@ -1,3 +1,4 @@
+use std::{thread, time::Duration};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::ai::action_classifier::{classify_action, AiAction};
@@ -127,4 +128,217 @@ pub fn open_panel_for_current_selection(
     let opened = open_panel_for_context(&app, context)?;
     state.store_latest_selection(opened.clone());
     Ok(opened)
+}
+
+#[tauri::command]
+pub fn copy_to_clipboard(app: AppHandle, text: String) -> Result<(), PublicError> {
+    write_text_to_clipboard(&text)?;
+    hide_floating_button(app)?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn replace_selected_text(
+    app: AppHandle,
+    text: String,
+    selection_id: Option<String>,
+) -> Result<(), PublicError> {
+    let text = validate_replacement_text(&text)?.to_string();
+    let state = app.state::<AppState>();
+    validate_replacement_selection(&state, selection_id.as_deref())?;
+    let target_window = state.latest_selection_window_handle();
+    write_text_to_clipboard(&text)?;
+    hide_floating_button(app)?;
+    thread::sleep(Duration::from_millis(80));
+    paste_clipboard_into_target_window(target_window)
+}
+
+pub fn validate_replacement_selection(
+    state: &AppState,
+    selection_id: Option<&str>,
+) -> Result<(), PublicError> {
+    let Some(selection_id) = selection_id.filter(|value| !value.trim().is_empty()) else {
+        return Ok(());
+    };
+
+    let latest = state.latest_selection().ok_or_else(|| PublicError {
+        code: "selection_context_missing".to_string(),
+        message: "没有可替换的选区上下文。".to_string(),
+    })?;
+
+    if latest.selection.id == selection_id {
+        Ok(())
+    } else {
+        Err(PublicError {
+            code: "selection_context_changed".to_string(),
+            message: "选区已经变化，请重新选择后再替换。".to_string(),
+        })
+    }
+}
+
+pub fn validate_replacement_text(text: &str) -> Result<&str, PublicError> {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        Err(PublicError {
+            code: "replacement_text_required".to_string(),
+            message: "替换文本不能为空。".to_string(),
+        })
+    } else {
+        Ok(text)
+    }
+}
+
+#[cfg(windows)]
+fn write_text_to_clipboard(text: &str) -> Result<(), PublicError> {
+    use std::ptr::null_mut;
+    use windows_sys::Win32::System::{
+        DataExchange::{CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData},
+        Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE},
+        Ole::CF_UNICODETEXT,
+    };
+
+    let text_wide: Vec<u16> = text.encode_utf16().collect();
+    let text_wide_with_null: Vec<u16> = {
+        let mut v = text_wide;
+        v.push(0);
+        v
+    };
+
+    unsafe {
+        if OpenClipboard(null_mut()) == 0 {
+            return Err(PublicError {
+                code: "clipboard_open_failed".to_string(),
+                message: "Failed to open clipboard.".to_string(),
+            });
+        }
+
+        EmptyClipboard();
+
+        let size = text_wide_with_null.len() * 2;
+        let mem = GlobalAlloc(GMEM_MOVEABLE, size);
+        if mem.is_null() {
+            CloseClipboard();
+            return Err(PublicError {
+                code: "clipboard_alloc_failed".to_string(),
+                message: "Failed to allocate clipboard memory.".to_string(),
+            });
+        }
+
+        let ptr = GlobalLock(mem);
+        if ptr.is_null() {
+            CloseClipboard();
+            return Err(PublicError {
+                code: "clipboard_lock_failed".to_string(),
+                message: "Failed to lock clipboard memory.".to_string(),
+            });
+        }
+
+        std::ptr::copy_nonoverlapping(
+            text_wide_with_null.as_ptr(),
+            ptr as *mut u16,
+            text_wide_with_null.len(),
+        );
+        GlobalUnlock(mem);
+
+        if SetClipboardData(CF_UNICODETEXT.into(), mem).is_null() {
+            CloseClipboard();
+            return Err(PublicError {
+                code: "clipboard_set_failed".to_string(),
+                message: "Failed to set clipboard data.".to_string(),
+            });
+        }
+
+        CloseClipboard();
+    }
+
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn write_text_to_clipboard(_text: &str) -> Result<(), PublicError> {
+    Err(PublicError {
+        code: "clipboard_unsupported".to_string(),
+        message: "当前平台暂不支持写入剪贴板。".to_string(),
+    })
+}
+
+#[cfg(windows)]
+fn paste_clipboard_into_target_window(target_window: Option<isize>) -> Result<(), PublicError> {
+    use windows_sys::Win32::Foundation::HWND;
+    use windows_sys::Win32::UI::{
+        Input::KeyboardAndMouse::{
+            SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, VK_CONTROL,
+            VK_V,
+        },
+        WindowsAndMessaging::{GetForegroundWindow, IsWindow, SetForegroundWindow},
+    };
+
+    fn keyboard_input(vk: u16, flags: u32) -> INPUT {
+        INPUT {
+            r#type: INPUT_KEYBOARD,
+            Anonymous: INPUT_0 {
+                ki: KEYBDINPUT {
+                    wVk: vk,
+                    wScan: 0,
+                    dwFlags: flags,
+                    time: 0,
+                    dwExtraInfo: 0,
+                },
+            },
+        }
+    }
+
+    let Some(target_window) = target_window else {
+        return Err(PublicError {
+            code: "selection_target_missing".to_string(),
+            message: "没有可恢复焦点的原始窗口，请重新选择后再替换。".to_string(),
+        });
+    };
+
+    let hwnd = target_window as HWND;
+    let focused = unsafe {
+        if IsWindow(hwnd) == 0 || SetForegroundWindow(hwnd) == 0 {
+            false
+        } else {
+            thread::sleep(Duration::from_millis(80));
+            GetForegroundWindow() == hwnd
+        }
+    };
+    if !focused {
+        return Err(PublicError {
+            code: "selection_target_focus_failed".to_string(),
+            message: "无法恢复原始窗口焦点，已取消自动替换。".to_string(),
+        });
+    }
+
+    let mut inputs = [
+        keyboard_input(VK_CONTROL, 0),
+        keyboard_input(VK_V, 0),
+        keyboard_input(VK_V, KEYEVENTF_KEYUP),
+        keyboard_input(VK_CONTROL, KEYEVENTF_KEYUP),
+    ];
+
+    let sent = unsafe {
+        SendInput(
+            inputs.len() as u32,
+            inputs.as_mut_ptr(),
+            std::mem::size_of::<INPUT>() as i32,
+        )
+    };
+    if sent != inputs.len() as u32 {
+        return Err(PublicError {
+            code: "paste_failed".to_string(),
+            message: "模拟粘贴替换选区失败。".to_string(),
+        });
+    }
+
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn paste_clipboard_into_target_window(_target_window: Option<isize>) -> Result<(), PublicError> {
+    Err(PublicError {
+        code: "paste_unsupported".to_string(),
+        message: "当前平台暂不支持自动替换选区。".to_string(),
+    })
 }

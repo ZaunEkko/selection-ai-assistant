@@ -68,17 +68,38 @@ pub fn clipboard_restore_attempt_sequence(
     attempts
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClipboardRestoreStatus {
+    RestoredOriginal,
+    OriginalUnavailable,
+    RestoreFailed,
+}
+
+pub fn should_accept_selected_text_after_capture(
+    selected_text: Option<&str>,
+    restore_status: ClipboardRestoreStatus,
+) -> Option<String> {
+    match restore_status {
+        ClipboardRestoreStatus::RestoredOriginal | ClipboardRestoreStatus::OriginalUnavailable => {
+            selected_text
+                .map(str::to_string)
+                .filter(|text| text.chars().count() >= 2)
+        }
+        ClipboardRestoreStatus::RestoreFailed => None,
+    }
+}
+
 pub fn should_accept_selected_text_after_restore(
     selected_text: Option<&str>,
     restored_clipboard: bool,
 ) -> Option<String> {
-    if !restored_clipboard {
-        return None;
-    }
+    let restore_status = if restored_clipboard {
+        ClipboardRestoreStatus::RestoredOriginal
+    } else {
+        ClipboardRestoreStatus::RestoreFailed
+    };
 
-    selected_text
-        .map(str::to_string)
-        .filter(|text| text.chars().count() >= 2)
+    should_accept_selected_text_after_capture(selected_text, restore_status)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

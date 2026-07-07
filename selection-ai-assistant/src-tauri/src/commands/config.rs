@@ -39,6 +39,7 @@ pub fn save_app_behavior_config_in_state(
     })?;
 
     let mut candidate = config.clone();
+    candidate.hotkey = preferences.hotkey.trim().to_string();
     candidate.start_minimized_to_tray = preferences.start_minimized_to_tray;
     candidate.close_button_behavior = preferences.close_button_behavior;
 
@@ -63,6 +64,7 @@ pub fn confirm_main_window_close(
     let config = save_app_behavior_config_in_state(
         &state,
         AppBehaviorConfig {
+            hotkey: current.hotkey,
             start_minimized_to_tray: current.start_minimized_to_tray,
             close_button_behavior: behavior,
         },
@@ -119,6 +121,73 @@ pub fn save_provider_config_in_state(
     }
 
     candidate.default_provider_id = Some(provider.id);
+
+    if let Some(path) = &state.settings_path {
+        candidate.save_to_path(path).map_err(|err| PublicError {
+            code: "config_save_failed".to_string(),
+            message: format!("Failed to save settings: {err}"),
+        })?;
+    }
+
+    *config = candidate.clone();
+    Ok(candidate)
+}
+
+#[tauri::command]
+pub fn set_default_provider(
+    state: State<'_, AppState>,
+    provider_id: String,
+) -> Result<AppConfig, PublicError> {
+    let mut config = state.config.lock().map_err(|err| PublicError {
+        code: "config_lock_failed".to_string(),
+        message: err.to_string(),
+    })?;
+
+    if !config.providers.iter().any(|p| p.id == provider_id) {
+        return Err(PublicError {
+            code: "provider_not_found".to_string(),
+            message: format!("Provider with id '{}' not found.", provider_id),
+        });
+    }
+
+    let mut candidate = config.clone();
+    candidate.default_provider_id = Some(provider_id);
+
+    if let Some(path) = &state.settings_path {
+        candidate.save_to_path(path).map_err(|err| PublicError {
+            code: "config_save_failed".to_string(),
+            message: format!("Failed to save settings: {err}"),
+        })?;
+    }
+
+    *config = candidate.clone();
+    Ok(candidate)
+}
+
+#[tauri::command]
+pub fn delete_provider(
+    state: State<'_, AppState>,
+    provider_id: String,
+) -> Result<AppConfig, PublicError> {
+    let mut config = state.config.lock().map_err(|err| PublicError {
+        code: "config_lock_failed".to_string(),
+        message: err.to_string(),
+    })?;
+
+    let mut candidate = config.clone();
+    let original_len = candidate.providers.len();
+    candidate.providers.retain(|p| p.id != provider_id);
+
+    if candidate.providers.len() == original_len {
+        return Err(PublicError {
+            code: "provider_not_found".to_string(),
+            message: format!("Provider with id '{}' not found.", provider_id),
+        });
+    }
+
+    if candidate.default_provider_id.as_ref() == Some(&provider_id) {
+        candidate.default_provider_id = candidate.providers.first().map(|p| p.id.clone());
+    }
 
     if let Some(path) = &state.settings_path {
         candidate.save_to_path(path).map_err(|err| PublicError {

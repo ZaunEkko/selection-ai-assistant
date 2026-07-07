@@ -20,6 +20,15 @@ fn builds_translate_explain_prompt() {
 }
 
 #[test]
+fn builds_translate_only_prompt_without_explanations() {
+    let messages = build_prompt_messages(AiAction::TranslateOnly, "你好世界");
+
+    assert!(messages[1].content.contains("只输出译文"));
+    assert!(messages[1].content.contains("不要解释"));
+    assert!(messages[1].content.contains("你好世界"));
+}
+
+#[test]
 fn builds_expand_prompt_prompt() {
     let messages = build_prompt_messages(AiAction::ExpandPrompt, "帮我写一个产品发布的提示词");
 

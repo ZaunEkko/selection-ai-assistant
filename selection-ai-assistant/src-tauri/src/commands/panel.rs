@@ -3,13 +3,15 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use crate::app_state::AppState;
 
 use crate::floating_window::positioning::{
-    place_near_anchor, place_source_left_of_panel, ScreenBounds, WindowSize,
+    place_near_anchor, place_source_left_of_panel, place_toolbar_above_anchor,
+    place_toolbar_near_selection, place_translate_result_near_anchor,
+    place_translate_result_near_selection, ScreenBounds, WindowSize,
 };
 use crate::types::{Point, PublicError, Rect};
 
 const FLOATING_BUTTON_SIZE: WindowSize = WindowSize {
-    width: 40.0,
-    height: 40.0,
+    width: 244.0,
+    height: 44.0,
 };
 const AI_PANEL_FALLBACK_SIZE: WindowSize = WindowSize {
     width: 420.0,
@@ -18,6 +20,10 @@ const AI_PANEL_FALLBACK_SIZE: WindowSize = WindowSize {
 const SOURCE_TEXT_FALLBACK_SIZE: WindowSize = WindowSize {
     width: 360.0,
     height: 620.0,
+};
+const TRANSLATE_RESULT_SIZE: WindowSize = WindowSize {
+    width: 320.0,
+    height: 180.0,
 };
 const SOURCE_TEXT_WINDOW_GAP: f64 = 12.0;
 
@@ -41,6 +47,30 @@ fn position_window_near_anchor(
 ) -> Result<Point, PublicError> {
     let screen = screen_bounds_for_anchor(app, anchor)?;
     Ok(place_near_anchor(anchor, size, screen))
+}
+
+fn position_toolbar_above_anchor(
+    app: &AppHandle,
+    anchor: Point,
+    size: WindowSize,
+) -> Result<Point, PublicError> {
+    let screen = screen_bounds_for_anchor(app, anchor)?;
+    Ok(place_toolbar_above_anchor(anchor, size, screen))
+}
+
+fn position_toolbar_near_selection(
+    app: &AppHandle,
+    anchor: Point,
+    selection_rects: &[Rect],
+    size: WindowSize,
+) -> Result<Point, PublicError> {
+    let screen = screen_bounds_for_anchor(app, anchor)?;
+    Ok(place_toolbar_near_selection(
+        anchor,
+        selection_rects,
+        size,
+        screen,
+    ))
 }
 
 fn screen_bounds_for_anchor(app: &AppHandle, anchor: Point) -> Result<ScreenBounds, PublicError> {
@@ -127,25 +157,38 @@ fn position_source_text_window_left_of_panel(
 }
 
 fn assistant_window_rects(app: &AppHandle) -> Vec<Rect> {
-    ["floating-button", "ai-panel", "source-text"]
-        .into_iter()
-        .filter_map(|label| app.get_webview_window(label))
-        .filter(|window| window.is_visible().unwrap_or(false))
-        .filter_map(|window| {
-            let position = window.outer_position().ok()?;
-            let size = window.outer_size().ok()?;
-            Some(Rect {
-                x: position.x as f64,
-                y: position.y as f64,
-                width: size.width as f64,
-                height: size.height as f64,
-            })
+    [
+        "floating-button",
+        "ai-panel",
+        "source-text",
+        "translate-result",
+    ]
+    .into_iter()
+    .filter_map(|label| app.get_webview_window(label))
+    .filter(|window| window.is_visible().unwrap_or(false))
+    .filter_map(|window| {
+        let position = window.outer_position().ok()?;
+        let size = window.outer_size().ok()?;
+        Some(Rect {
+            x: position.x as f64,
+            y: position.y as f64,
+            width: size.width as f64,
+            height: size.height as f64,
         })
-        .collect()
+    })
+    .collect()
 }
 
 #[tauri::command]
 pub fn show_floating_button(app: AppHandle, position: Point) -> Result<(), PublicError> {
+    show_floating_button_for_selection(app, position, &[])
+}
+
+pub fn show_floating_button_for_selection(
+    app: AppHandle,
+    position: Point,
+    selection_rects: &[Rect],
+) -> Result<(), PublicError> {
     let window = app
         .get_webview_window("floating-button")
         .ok_or_else(|| PublicError {
@@ -153,8 +196,41 @@ pub fn show_floating_button(app: AppHandle, position: Point) -> Result<(), Publi
             message: "Floating button window is not configured.".to_string(),
         })?;
 
-    let position = position_window_near_anchor(&app, position, FLOATING_BUTTON_SIZE)?;
-    set_window_position(&window, position)?;
+    let position = floating_button_position_for_selection(&app, position, selection_rects)?;
+    show_floating_button_window(&window, position)
+}
+
+pub fn floating_button_position_for_selection(
+    app: &AppHandle,
+    position: Point,
+    selection_rects: &[Rect],
+) -> Result<Point, PublicError> {
+    if selection_rects.is_empty() {
+        position_toolbar_above_anchor(app, position, FLOATING_BUTTON_SIZE)
+    } else {
+        position_toolbar_near_selection(app, position, selection_rects, FLOATING_BUTTON_SIZE)
+    }
+}
+
+pub fn show_floating_button_at_position(
+    app: AppHandle,
+    position: Point,
+) -> Result<(), PublicError> {
+    let window = app
+        .get_webview_window("floating-button")
+        .ok_or_else(|| PublicError {
+            code: "floating_button_missing".to_string(),
+            message: "Floating button window is not configured.".to_string(),
+        })?;
+
+    show_floating_button_window(&window, position)
+}
+
+fn show_floating_button_window(
+    window: &tauri::WebviewWindow,
+    position: Point,
+) -> Result<(), PublicError> {
+    set_window_position(window, position)?;
     window
         .show()
         .map_err(|err| command_error("show_failed", err))?;
@@ -260,4 +336,61 @@ pub fn hide_source_text_window(app: AppHandle) -> Result<(), PublicError> {
             .map_err(|err| command_error("hide_failed", err))?;
     }
     Ok(())
+}
+
+#[tauri::command]
+pub fn show_translate_result(
+    app: AppHandle,
+    position: Point,
+    original_text: String,
+    translated_text: String,
+    selection_rects: Vec<Rect>,
+) -> Result<(), PublicError> {
+    let window = app
+        .get_webview_window("translate-result")
+        .ok_or_else(|| PublicError {
+            code: "translate_result_missing".to_string(),
+            message: "Translate result window is not configured.".to_string(),
+        })?;
+
+    let position = {
+        let screen = screen_bounds_for_anchor(&app, position)?;
+        let size = current_window_size(&window, TRANSLATE_RESULT_SIZE);
+        if selection_rects.is_empty() {
+            place_translate_result_near_anchor(position, size, screen)
+        } else {
+            place_translate_result_near_selection(position, &selection_rects, size, screen)
+        }
+    };
+    set_window_position(&window, position)?;
+    window
+        .show()
+        .map_err(|err| command_error("show_failed", err))?;
+    window
+        .emit(
+            "translate_result",
+            TranslateResultPayload {
+                original_text,
+                translated_text,
+            },
+        )
+        .map_err(|err| command_error("emit_failed", err))?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn hide_translate_result(app: AppHandle) -> Result<(), PublicError> {
+    if let Some(window) = app.get_webview_window("translate-result") {
+        window
+            .hide()
+            .map_err(|err| command_error("hide_failed", err))?;
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TranslateResultPayload {
+    pub original_text: String,
+    pub translated_text: String,
 }

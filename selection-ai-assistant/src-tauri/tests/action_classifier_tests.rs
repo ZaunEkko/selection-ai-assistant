@@ -47,3 +47,15 @@ fn serializes_expand_prompt_action_as_camel_case() {
         "\"expandPrompt\"",
     );
 }
+
+#[test]
+fn serializes_translate_only_action_as_camel_case() {
+    assert_eq!(
+        serde_json::from_str::<AiAction>("\"translateOnly\"").unwrap(),
+        AiAction::TranslateOnly,
+    );
+    assert_eq!(
+        serde_json::to_string(&AiAction::TranslateOnly).unwrap(),
+        "\"translateOnly\"",
+    );
+}
