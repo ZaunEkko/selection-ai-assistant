@@ -1,10 +1,11 @@
 use selection_ai_assistant_lib::selection::{
     clipboard_reader::{
         clipboard_restore_attempt_sequence, empty_clipboard_outcome,
-        should_accept_selected_text_after_restore,
+        should_accept_selected_text_after_capture, should_accept_selected_text_after_restore,
         should_block_clipboard_fallback_after_uia_result,
         should_prepare_conservative_clipboard_capture, should_use_clipboard_fallback,
         ClipboardFallbackContext, ClipboardFormatSnapshot, ClipboardRestorePlan,
+        ClipboardRestoreStatus,
     },
     uia_reader::{SelectionConfidence, UiaSelectionResult},
 };
@@ -128,6 +129,17 @@ fn restore_attempt_sequence_retries_empty_clipboard_cleanup() {
             ClipboardRestorePlan::Empty,
             ClipboardRestorePlan::Empty,
         ]
+    );
+}
+
+#[test]
+fn selected_text_is_accepted_when_original_clipboard_cannot_be_restored() {
+    assert_eq!(
+        should_accept_selected_text_after_capture(
+            Some("selected text"),
+            ClipboardRestoreStatus::OriginalUnavailable,
+        ),
+        Some("selected text".to_string())
     );
 }
 
