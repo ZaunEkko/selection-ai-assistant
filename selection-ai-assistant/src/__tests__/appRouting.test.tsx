@@ -71,6 +71,7 @@ vi.mock('@tauri-apps/api/event', () => ({
       );
     });
   },
+  emit: vi.fn(() => Promise.resolve()),
 }));
 
 vi.mock('../api/tauri', () => ({
