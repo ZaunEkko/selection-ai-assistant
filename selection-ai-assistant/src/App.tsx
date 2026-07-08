@@ -1,6 +1,7 @@
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { AiPanel } from './windows/AiPanel';
 import { MiniActionBar } from './windows/MiniActionBar';
+import { ReplacementPresetPanel } from './windows/ReplacementPresetPanel';
 import { Settings } from './windows/Settings';
 import { SourceTextWindow } from './windows/SourceTextWindow';
 import { TranslateResult } from './windows/TranslateResult';
@@ -14,6 +15,10 @@ export default function App() {
 
   if (label === 'ai-panel') {
     return <AiPanel />;
+  }
+
+  if (label === 'replacement-preset') {
+    return <ReplacementPresetPanel />;
   }
 
   if (label === 'source-text') {

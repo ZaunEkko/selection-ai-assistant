@@ -10,6 +10,9 @@ const {
   focusListeners,
   openPanelFromFloatingButtonMock,
   runAiActionMock,
+  saveAppBehaviorConfigMock,
+  showReplacementPresetPanelMock,
+  hideReplacementPresetPanelMock,
   showTranslateResultMock,
   hideTranslateResultMock,
   hideFloatingButtonMock,
@@ -25,6 +28,9 @@ const {
   focusListeners: [] as Listener<boolean>[],
   openPanelFromFloatingButtonMock: vi.fn(),
   runAiActionMock: vi.fn(),
+  saveAppBehaviorConfigMock: vi.fn(),
+  showReplacementPresetPanelMock: vi.fn(),
+  hideReplacementPresetPanelMock: vi.fn(),
   showTranslateResultMock: vi.fn(),
   hideTranslateResultMock: vi.fn(),
   hideFloatingButtonMock: vi.fn(),
@@ -83,10 +89,13 @@ vi.mock('../api/tauri', () => ({
       manualHotkeyAlwaysEnabled: true,
       startMinimizedToTray: false,
       closeButtonBehavior: 'ask',
+      replacementTargetLanguage: 'korean',
+      replacementCustomTarget: '',
       disabledApps: [],
     }),
   ),
   saveProviderConfig: vi.fn(),
+  saveAppBehaviorConfig: saveAppBehaviorConfigMock,
   getPlatformCapabilities: vi.fn(() =>
     Promise.resolve({
       platform: 'windows',
@@ -112,6 +121,8 @@ vi.mock('../api/tauri', () => ({
   getLatestPanelContext: getLatestPanelContextMock,
   getLatestSourceTextContext: getLatestSourceTextContextMock,
   openPanelFromFloatingButton: openPanelFromFloatingButtonMock,
+  showReplacementPresetPanel: showReplacementPresetPanelMock,
+  hideReplacementPresetPanel: hideReplacementPresetPanelMock,
   showTranslateResult: showTranslateResultMock,
   hideTranslateResult: hideTranslateResultMock,
   hideFloatingButton: hideFloatingButtonMock,
@@ -137,7 +148,10 @@ describe('App routing by Tauri window label', () => {
     listeners.clear();
     focusListeners.splice(0);
     runAiActionMock.mockReset();
+    saveAppBehaviorConfigMock.mockReset();
     showTranslateResultMock.mockReset();
+    showReplacementPresetPanelMock.mockReset();
+    hideReplacementPresetPanelMock.mockReset();
     hideFloatingButtonMock.mockReset();
     replaceSelectedTextMock.mockReset();
     openPanelFromFloatingButtonMock.mockReset();
@@ -149,7 +163,27 @@ describe('App routing by Tauri window label', () => {
     currentWindowStartDraggingMock.mockReset();
     currentWindowStartResizeDraggingMock.mockReset();
     runAiActionMock.mockResolvedValue({ requestId: 'request-1' });
+    saveAppBehaviorConfigMock.mockResolvedValue({
+      defaultProviderId: null,
+      providers: [],
+      hoverRadius: 90,
+      hoverDelayMs: 220,
+      candidateTimeoutMs: 4000,
+      minDragDistance: 6,
+      hotkey: 'Ctrl+Alt+A',
+      clipboardFallbackEnabled: true,
+      showClipboardPrivacyWarningOnFirstUse: true,
+      disableInElevatedWindows: true,
+      manualHotkeyAlwaysEnabled: true,
+      startMinimizedToTray: false,
+      closeButtonBehavior: 'ask',
+      replacementTargetLanguage: 'korean',
+      replacementCustomTarget: '',
+      disabledApps: [],
+    });
     showTranslateResultMock.mockResolvedValue(undefined);
+    showReplacementPresetPanelMock.mockResolvedValue(undefined);
+    hideReplacementPresetPanelMock.mockResolvedValue(undefined);
     hideTranslateResultMock.mockResolvedValue(undefined);
     hideFloatingButtonMock.mockResolvedValue(undefined);
     replaceSelectedTextMock.mockResolvedValue(undefined);
@@ -189,6 +223,20 @@ describe('App routing by Tauri window label', () => {
     expect(toolbar.querySelector('img')).toBeNull();
   });
 
+  it('opens the replacement preset panel when the replace button is hovered or receives focus', async () => {
+    currentLabel = 'floating-button';
+
+    render(<App />);
+    const replaceButton = screen.getByRole('button', { name: '翻译并替换文本' });
+    fireEvent.mouseEnter(replaceButton);
+
+    await waitFor(() => expect(showReplacementPresetPanelMock).toHaveBeenCalledTimes(1));
+
+    fireEvent.focus(replaceButton);
+
+    await waitFor(() => expect(showReplacementPresetPanelMock).toHaveBeenCalledTimes(2));
+  });
+
   it('opens the full panel when more actions is clicked', async () => {
     currentLabel = 'floating-button';
 
@@ -221,9 +269,8 @@ describe('App routing by Tauri window label', () => {
     await waitFor(() =>
       expect(showTranslateResultMock).toHaveBeenNthCalledWith(1, { x: 320, y: 240 }, 'hello world', '', []),
     );
-    await waitFor(() =>
-      expect(showTranslateResultMock).toHaveBeenLastCalledWith({ x: 320, y: 240 }, 'hello world', '你好世界', []),
-    );
+    await waitFor(() => expect(showTranslateResultMock).toHaveBeenLastCalledWith({ x: 320, y: 240 }, 'hello world', '你好世界', []));
+    expect(hideReplacementPresetPanelMock).toHaveBeenCalledTimes(1);
     expect(runAiActionMock).toHaveBeenCalledWith(
       expect.objectContaining({ action: 'translateOnly', text: 'hello world', requestId: expect.stringMatching(/^translate-/) }),
     );
@@ -328,9 +375,76 @@ describe('App routing by Tauri window label', () => {
     fireEvent.click(screen.getByRole('button', { name: '翻译并替换文本' }));
 
     await waitFor(() => expect(replaceSelectedTextMock).toHaveBeenCalledWith('Hello world', 'selection-replace'));
+    expect(hideReplacementPresetPanelMock).toHaveBeenCalledTimes(1);
     expect(runAiActionMock).toHaveBeenCalledWith(
-      expect.objectContaining({ action: 'translateOnly', text: '你好世界', requestId: expect.stringMatching(/^replace-/) }),
+      expect.objectContaining({
+        action: 'translateOnly',
+        text: '你好世界',
+        targetLanguage: '韩文',
+        requestId: expect.stringMatching(/^replace-/),
+      }),
     );
+  });
+
+  it('shows replace progress text while the replacement stream is pending', async () => {
+    currentLabel = 'floating-button';
+    let finishRequest!: () => void;
+    getLatestPanelContextMock.mockResolvedValue({
+      selection: {
+        id: 'selection-replace',
+        text: '你好世界',
+        sourceApp: 'manual',
+        windowTitle: 'Manual hotkey',
+        fallbackPoint: { x: 320, y: 240 },
+      },
+      action: 'translateExplain',
+    });
+    runAiActionMock.mockImplementation(
+      (request: { requestId: string }) =>
+        new Promise((resolve) => {
+          finishRequest = () => {
+            emit('ai_stream_delta', { requestId: request.requestId, delta: 'Hello world' });
+            emit('ai_stream_done', { requestId: request.requestId });
+            resolve({ requestId: request.requestId });
+          };
+        }),
+    );
+
+    render(<App />);
+    fireEvent.click(screen.getByRole('button', { name: '翻译并替换文本' }));
+
+    expect(screen.getByRole('button', { name: '翻译并替换文本' })).toHaveTextContent('替换中…');
+    await waitFor(() => expect(runAiActionMock).toHaveBeenCalledTimes(1));
+    await act(async () => finishRequest());
+    await waitFor(() => expect(replaceSelectedTextMock).toHaveBeenCalledWith('Hello world', 'selection-replace'));
+  });
+
+  it('saves replacement target from the compact replacement preset window without closing it', async () => {
+    currentLabel = 'replacement-preset';
+    saveAppBehaviorConfigMock.mockImplementation(async (preferences) => ({
+      defaultProviderId: null,
+      providers: [],
+      hoverRadius: 90,
+      hoverDelayMs: 220,
+      candidateTimeoutMs: 4000,
+      minDragDistance: 6,
+      clipboardFallbackEnabled: true,
+      showClipboardPrivacyWarningOnFirstUse: true,
+      disableInElevatedWindows: true,
+      manualHotkeyAlwaysEnabled: true,
+      disabledApps: [],
+      ...preferences,
+    }));
+
+    render(<App />);
+    fireEvent.click(await screen.findByRole('button', { name: '日文' }));
+
+    await waitFor(() =>
+      expect(saveAppBehaviorConfigMock).toHaveBeenCalledWith(
+        expect.objectContaining({ replacementTargetLanguage: 'japanese', replacementCustomTarget: '' }),
+      ),
+    );
+    expect(hideReplacementPresetPanelMock).not.toHaveBeenCalled();
   });
 
   it('does not replace selected text when the replace stream reports an error', async () => {

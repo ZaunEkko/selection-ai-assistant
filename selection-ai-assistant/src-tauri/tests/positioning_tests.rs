@@ -192,7 +192,7 @@ fn places_toolbar_above_first_selection_rect_even_when_side_space_allows() {
 }
 
 #[test]
-fn places_toolbar_to_right_when_selection_is_near_screen_top() {
+fn places_toolbar_below_selection_when_selection_is_near_screen_top() {
     let position = place_toolbar_near_selection(
         Point { x: 120.0, y: 8.0 },
         &[Rect {
@@ -213,7 +213,7 @@ fn places_toolbar_to_right_when_selection_is_near_screen_top() {
         },
     );
 
-    assert_eq!(position, Point { x: 312.0, y: 4.0 });
+    assert_eq!(position, Point { x: 120.0, y: 42.0 });
 }
 
 #[test]

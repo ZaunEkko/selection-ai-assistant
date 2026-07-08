@@ -25,6 +25,8 @@ pub fn run() {
             commands::config::delete_provider,
             commands::panel::show_floating_button,
             commands::panel::hide_floating_button,
+            commands::panel::show_replacement_preset_panel,
+            commands::panel::hide_replacement_preset_panel,
             commands::panel::show_ai_panel,
             commands::panel::hide_ai_panel,
             commands::panel::show_source_text_window,

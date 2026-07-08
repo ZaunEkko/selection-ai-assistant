@@ -1,4 +1,6 @@
-use selection_ai_assistant_lib::config::{AiProviderKind, AppConfig, CloseButtonBehavior};
+use selection_ai_assistant_lib::config::{
+    AiProviderKind, AppConfig, CloseButtonBehavior, ReplacementTargetLanguage,
+};
 
 #[test]
 fn release_binary_uses_windows_subsystem_to_avoid_console_window() {
@@ -85,6 +87,11 @@ fn default_config_contains_privacy_defaults() {
     assert!(config.manual_hotkey_always_enabled);
     assert!(!config.start_minimized_to_tray);
     assert_eq!(config.close_button_behavior, CloseButtonBehavior::Ask);
+    assert_eq!(
+        config.replacement_target_language,
+        ReplacementTargetLanguage::Auto
+    );
+    assert_eq!(config.replacement_custom_target, "");
     assert!(config.is_disabled_process("Bitwarden.exe"));
     assert!(config.is_disabled_process("bitwarden.exe"));
 }
@@ -118,4 +125,9 @@ fn settings_schema_defaults_missing_fields_for_backward_compatibility() {
     assert!(config.manual_hotkey_always_enabled);
     assert!(!config.start_minimized_to_tray);
     assert_eq!(config.close_button_behavior, CloseButtonBehavior::Ask);
+    assert_eq!(
+        config.replacement_target_language,
+        ReplacementTargetLanguage::Auto
+    );
+    assert_eq!(config.replacement_custom_target, "");
 }

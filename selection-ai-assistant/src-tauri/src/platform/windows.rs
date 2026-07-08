@@ -55,9 +55,9 @@ use crate::{
     input_monitor::events::{
         consume_pending_selection, handle_hotkey_state,
         hover_action_for_pending_selection_when_idle, manual_hotkey_trigger_key,
-        visible_floating_button_action_when_idle, HotkeyAction, HotkeyKeyState, MouseButtonEvent,
-        PendingHotkeyAction, PendingSelection, PendingSelectionHoverAction, VisibleFloatingButton,
-        VisibleFloatingButtonAction,
+        should_follow_scroll_for_source, visible_floating_button_action_when_idle, HotkeyAction,
+        HotkeyKeyState, MouseButtonEvent, PendingHotkeyAction, PendingSelection,
+        PendingSelectionHoverAction, VisibleFloatingButton, VisibleFloatingButtonAction,
     },
     platform::{
         ClipboardBackend, InputMonitor, PermissionChecker, PlatformBackend, PlatformFeatureStatus,
@@ -836,11 +836,17 @@ fn capture_store_and_show_floating_button(
                 context.selection.text.chars().count()
             ));
             let window_position = floating_button_window_position(app).unwrap_or(toolbar_anchor);
+            let scroll_follow_enabled = should_follow_scroll_for_source(
+                &context.selection.source_app,
+                &context.selection.window_title,
+            );
+            state.next_scroll_follow_generation();
             state.store_latest_floating_button_window_position(window_position);
             Some(VisibleFloatingButton {
                 window_position,
                 selection_anchor: toolbar_anchor,
                 selection_rect,
+                scroll_follow_enabled,
             })
         }
         Err(error) => {
@@ -902,6 +908,12 @@ fn follow_visible_floating_button_after_scroll(
     let Some(visible) = visible_floating_button.as_mut() else {
         return;
     };
+    if !visible.scroll_follow_enabled {
+        trace_selection_monitor(format_args!(
+            "floating button scroll follow skipped for fixed-source selection"
+        ));
+        return;
+    }
 
     let state = app.state::<AppState>();
     let generation = state.next_scroll_follow_generation();
@@ -910,7 +922,7 @@ fn follow_visible_floating_button_after_scroll(
         .latest_floating_button_window_position()
         .or_else(|| floating_button_window_position(app))
         .unwrap_or(visible.window_position);
-    visible.window_position = Point {
+    let fallback_window_position = Point {
         x: base_window_position.x,
         y: base_window_position.y + predicted_delta_y,
     };
@@ -919,7 +931,6 @@ fn follow_visible_floating_button_after_scroll(
         y: rect.y + predicted_delta_y,
         ..rect
     });
-    state.store_latest_floating_button_window_position(visible.window_position);
 
     let predicted_visual_rect = visible.selection_rect.or_else(|| {
         state.latest_selection_visual().map(|visual| {
@@ -929,6 +940,12 @@ fn follow_visible_floating_button_after_scroll(
             })
         })
     });
+    visible.window_position = predicted_visual_rect
+        .and_then(|rect| {
+            floating_button_position_for_selection(app, visible.selection_anchor, &[rect]).ok()
+        })
+        .unwrap_or(fallback_window_position);
+    state.store_latest_floating_button_window_position(visible.window_position);
 
     if show_floating_button_at_position(app.clone(), visible.window_position).is_ok() {
         trace_selection_monitor(format_args!(
@@ -981,7 +998,7 @@ fn follow_visible_floating_button_after_scroll(
 fn refresh_visible_floating_button_from_visual(
     app: &tauri::AppHandle,
     predicted_rect: Option<Rect>,
-    predicted_window_position: Point,
+    _predicted_window_position: Point,
 ) -> Option<Point> {
     let state = app.state::<AppState>();
     let visual = state.latest_selection_visual()?;
@@ -1000,10 +1017,7 @@ fn refresh_visible_floating_button_from_visual(
     };
     let positioned =
         floating_button_position_for_selection(app, toolbar_anchor, &[placement_rect]).ok()?;
-    let window_position = Point {
-        x: predicted_window_position.x,
-        y: positioned.y,
-    };
+    let window_position = positioned;
     show_floating_button_at_position(app.clone(), window_position).ok()?;
     state.store_latest_floating_button_window_position(window_position);
     state.store_latest_selection_visual(SelectionVisualState {
@@ -1016,7 +1030,7 @@ fn refresh_visible_floating_button_from_visual(
 fn refresh_visible_floating_button_from_uia(
     app: &tauri::AppHandle,
     predicted_rect: Option<Rect>,
-    predicted_window_position: Point,
+    _predicted_window_position: Point,
 ) -> Option<Point> {
     let state = app.state::<AppState>();
     let mut context = state.latest_selection()?;
@@ -1056,10 +1070,7 @@ fn refresh_visible_floating_button_from_uia(
         &context.selection.selection_rects,
     )
     .ok()?;
-    let window_position = Point {
-        x: predicted_window_position.x,
-        y: positioned.y,
-    };
+    let window_position = positioned;
     show_floating_button_at_position(app.clone(), window_position).ok()?;
     state.store_latest_floating_button_window_position(window_position);
     Some(window_position)
@@ -1080,6 +1091,7 @@ fn emit_context_if_panel_visible(
 fn assistant_window_rects(app: &tauri::AppHandle) -> Vec<Rect> {
     [
         "floating-button",
+        "replacement-preset",
         "ai-panel",
         "source-text",
         "translate-result",

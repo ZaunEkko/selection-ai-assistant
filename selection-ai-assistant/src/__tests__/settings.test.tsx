@@ -84,6 +84,8 @@ const config: AppConfig = {
   manualHotkeyAlwaysEnabled: true,
   startMinimizedToTray: false,
   closeButtonBehavior: 'ask',
+  replacementTargetLanguage: 'auto',
+  replacementCustomTarget: '',
   disabledApps: ['1Password.exe', 'KeePassXC.exe', 'Bitwarden.exe', 'mstsc.exe', 'AnyDesk.exe', 'TeamViewer.exe'],
 };
 
@@ -190,6 +192,8 @@ describe('Settings', () => {
         hotkey: 'Ctrl+Alt+T',
         startMinimizedToTray: true,
         closeButtonBehavior: 'exitApp',
+        replacementTargetLanguage: 'auto',
+        replacementCustomTarget: '',
       });
     });
     expect(screen.getByLabelText('手动快捷键')).toHaveValue('Ctrl+Alt+T');

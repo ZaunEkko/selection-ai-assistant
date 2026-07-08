@@ -13,6 +13,10 @@ const FLOATING_BUTTON_SIZE: WindowSize = WindowSize {
     width: 244.0,
     height: 44.0,
 };
+const REPLACEMENT_PRESET_SIZE: WindowSize = WindowSize {
+    width: 260.0,
+    height: 92.0,
+};
 const AI_PANEL_FALLBACK_SIZE: WindowSize = WindowSize {
     width: 420.0,
     height: 520.0,
@@ -124,6 +128,43 @@ fn set_window_position(window: &tauri::WebviewWindow, position: Point) -> Result
         .map_err(|err| command_error("set_position_failed", err))
 }
 
+fn position_replacement_preset_panel(app: &AppHandle) -> Result<Point, PublicError> {
+    let floating = app
+        .get_webview_window("floating-button")
+        .ok_or_else(|| PublicError {
+            code: "floating_button_missing".to_string(),
+            message: "Floating button window is not configured.".to_string(),
+        })?;
+    let floating_position = floating
+        .outer_position()
+        .map_err(|err| command_error("floating_position_unavailable", err))?;
+    let floating_size = current_window_size(&floating, FLOATING_BUTTON_SIZE);
+    let anchor = Point {
+        x: floating_position.x as f64 + floating_size.width / 2.0,
+        y: floating_position.y as f64 + floating_size.height / 2.0,
+    };
+    let screen = screen_bounds_for_anchor(app, anchor)?;
+    let gap = 6.0;
+    let min_x = screen.x;
+    let min_y = screen.y;
+    let max_x = (screen.x + screen.width - REPLACEMENT_PRESET_SIZE.width).max(min_x);
+    let max_y = (screen.y + screen.height - REPLACEMENT_PRESET_SIZE.height).max(min_y);
+    let floating_x = floating_position.x as f64;
+    let floating_y = floating_position.y as f64;
+    let above_y = floating_y - REPLACEMENT_PRESET_SIZE.height - gap;
+    let below_y = floating_y + floating_size.height + gap;
+    let y = if above_y >= screen.y {
+        above_y
+    } else {
+        below_y
+    };
+
+    Ok(Point {
+        x: floating_x.clamp(min_x, max_x),
+        y: y.clamp(min_y, max_y),
+    })
+}
+
 fn position_source_text_window_left_of_panel(
     app: &AppHandle,
     source_size: WindowSize,
@@ -159,6 +200,7 @@ fn position_source_text_window_left_of_panel(
 fn assistant_window_rects(app: &AppHandle) -> Vec<Rect> {
     [
         "floating-button",
+        "replacement-preset",
         "ai-panel",
         "source-text",
         "translate-result",
@@ -240,6 +282,34 @@ fn show_floating_button_window(
 #[tauri::command]
 pub fn hide_floating_button(app: AppHandle) -> Result<(), PublicError> {
     if let Some(window) = app.get_webview_window("floating-button") {
+        window
+            .hide()
+            .map_err(|err| command_error("hide_failed", err))?;
+    }
+    hide_replacement_preset_panel(app)?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn show_replacement_preset_panel(app: AppHandle) -> Result<(), PublicError> {
+    let window = app
+        .get_webview_window("replacement-preset")
+        .ok_or_else(|| PublicError {
+            code: "replacement_preset_missing".to_string(),
+            message: "Replacement preset window is not configured.".to_string(),
+        })?;
+
+    let position = position_replacement_preset_panel(&app)?;
+    set_window_position(&window, position)?;
+    window
+        .show()
+        .map_err(|err| command_error("show_failed", err))?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn hide_replacement_preset_panel(app: AppHandle) -> Result<(), PublicError> {
+    if let Some(window) = app.get_webview_window("replacement-preset") {
         window
             .hide()
             .map_err(|err| command_error("hide_failed", err))?;
