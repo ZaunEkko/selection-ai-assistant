@@ -2,6 +2,7 @@ import type { UiAction } from '../api/tauri';
 
 export const actionLabels: Record<UiAction, string> = {
   translateExplain: '翻译解释',
+  translateOnly: '纯翻译',
   explain: '解释',
   summarize: '总结',
   codeExplain: '代码解释',

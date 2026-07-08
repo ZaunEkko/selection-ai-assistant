@@ -2,11 +2,13 @@ import { listen } from '@tauri-apps/api/event';
 import { FormEvent, useEffect, useState } from 'react';
 import {
   confirmMainWindowClose,
+  deleteProvider,
   formatCommandError,
   getConfig,
   getPlatformCapabilities,
   saveAppBehaviorConfig,
   saveProviderConfig,
+  setDefaultProvider,
   type AiProviderConfig,
   type AppBehaviorConfig,
   type AppConfig,
@@ -21,8 +23,11 @@ type Feedback = {
 };
 
 const defaultAppBehavior: AppBehaviorConfig = {
+  hotkey: 'Ctrl+Alt+A',
   startMinimizedToTray: false,
   closeButtonBehavior: 'ask',
+  replacementTargetLanguage: 'auto',
+  replacementCustomTarget: '',
 };
 
 function platformLabel(platform: PlatformCapabilities['platform']) {
@@ -97,8 +102,11 @@ export function Settings() {
       .then((loadedConfig) => {
         setConfig(loadedConfig);
         setAppBehavior({
+          hotkey: loadedConfig.hotkey,
           startMinimizedToTray: loadedConfig.startMinimizedToTray,
           closeButtonBehavior: loadedConfig.closeButtonBehavior,
+          replacementTargetLanguage: loadedConfig.replacementTargetLanguage,
+          replacementCustomTarget: loadedConfig.replacementCustomTarget,
         });
       })
       .catch((err) => setError(formatCommandError(err)));
@@ -137,21 +145,43 @@ export function Settings() {
     setConfig(next);
   }
 
+  async function handleSetDefaultProvider(providerId: string) {
+    try {
+      const next = await setDefaultProvider(providerId);
+      setConfig(next);
+    } catch (err) {
+      setError(formatCommandError(err));
+    }
+  }
+
+  async function handleDeleteProvider(providerId: string) {
+    if (!confirm('确定要删除此服务商配置吗？')) return;
+    try {
+      const next = await deleteProvider(providerId);
+      setConfig(next);
+    } catch (err) {
+      setError(formatCommandError(err));
+    }
+  }
+
   async function handleSaveAppBehavior(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setBehaviorSaving(true);
-    setBehaviorFeedback({ kind: 'status', message: '正在保存启动与关闭设置…' });
+    setBehaviorFeedback({ kind: 'status', message: '正在保存启动、关闭与快捷键设置…' });
 
     try {
       const next = await saveAppBehaviorConfig(appBehavior);
       setConfig(next);
       setAppBehavior({
+        hotkey: next.hotkey,
         startMinimizedToTray: next.startMinimizedToTray,
         closeButtonBehavior: next.closeButtonBehavior,
+        replacementTargetLanguage: next.replacementTargetLanguage,
+        replacementCustomTarget: next.replacementCustomTarget,
       });
-      setBehaviorFeedback({ kind: 'status', message: '已保存启动与关闭设置。' });
+      setBehaviorFeedback({ kind: 'status', message: '已保存启动、关闭与快捷键设置。' });
     } catch (err) {
-      setBehaviorFeedback({ kind: 'error', message: `保存启动与关闭设置失败：${formatCommandError(err)}` });
+      setBehaviorFeedback({ kind: 'error', message: `保存启动、关闭与快捷键设置失败：${formatCommandError(err)}` });
     } finally {
       setBehaviorSaving(false);
     }
@@ -164,8 +194,11 @@ export function Settings() {
       const next = await confirmMainWindowClose(behavior);
       setConfig(next);
       setAppBehavior({
+        hotkey: next.hotkey,
         startMinimizedToTray: next.startMinimizedToTray,
         closeButtonBehavior: next.closeButtonBehavior,
+        replacementTargetLanguage: next.replacementTargetLanguage,
+        replacementCustomTarget: next.replacementCustomTarget,
       });
     } catch (err) {
       setError(formatCommandError(err));
@@ -188,8 +221,20 @@ export function Settings() {
           <ProviderForm initialProvider={selectedProvider} onSave={handleSave} />
 
           <section className="settings-section settings-section--embedded">
-            <h2>启动与关闭</h2>
+            <h2>启动、关闭与快捷键</h2>
             <form className="app-behavior-form" onSubmit={handleSaveAppBehavior} aria-busy={behaviorSaving}>
+              <label>
+                手动快捷键
+                <input
+                  type="text"
+                  value={appBehavior.hotkey}
+                  disabled={behaviorSaving}
+                  placeholder="Ctrl+Alt+A"
+                  onChange={(event) => setAppBehavior({ ...appBehavior, hotkey: event.target.value })}
+                />
+              </label>
+              <p className="field-help">当前支持 Ctrl+Alt+单个字母，例如 Ctrl+Alt+A 或 Ctrl+Alt+T。</p>
+
               <div className="checkbox-field">
                 <input
                   id="start-minimized-to-tray"
@@ -220,7 +265,7 @@ export function Settings() {
               </label>
 
               <button type="submit" disabled={behaviorSaving}>
-                {behaviorSaving ? '正在保存设置…' : '保存启动与关闭设置'}
+                {behaviorSaving ? '正在保存设置…' : '保存启动、关闭与快捷键设置'}
               </button>
               {behaviorFeedback?.kind === 'status' && <p role="status">{behaviorFeedback.message}</p>}
               {behaviorFeedback?.kind === 'error' && <p role="alert">{behaviorFeedback.message}</p>}
@@ -237,10 +282,22 @@ export function Settings() {
           <section className="settings-section">
             <h2>当前服务商</h2>
             {config?.providers.length ? (
-              <ul>
+              <ul className="provider-list">
                 {config.providers.map((provider) => (
-                  <li key={provider.id}>
-                    {provider.name} — {provider.model || '未设置模型'}
+                  <li key={provider.id} className={provider.id === config.defaultProviderId ? 'provider-item provider-item--active' : 'provider-item'}>
+                    <div className="provider-item-info">
+                      <strong>{provider.name} — {provider.model || '未设置模型'}</strong>
+                    </div>
+                    <div className="provider-item-actions">
+                      {provider.id !== config.defaultProviderId && (
+                        <button type="button" onClick={() => handleSetDefaultProvider(provider.id)}>
+                          设为默认
+                        </button>
+                      )}
+                      <button type="button" className="provider-delete-button" onClick={() => handleDeleteProvider(provider.id)}>
+                        删除
+                      </button>
+                    </div>
                   </li>
                 ))}
               </ul>
@@ -278,7 +335,7 @@ export function Settings() {
             aria-labelledby="close-confirm-title"
           >
             <h2 id="close-confirm-title">关闭 Selection AI Assistant？</h2>
-            <p>可以最小化到后台继续响应划词，也可以直接退出应用。本次选择会写入设置，之后可在“启动与关闭”中修改。</p>
+            <p>可以最小化到后台继续响应划词，也可以直接退出应用。本次选择会写入设置，之后可在“启动、关闭与快捷键”中修改。</p>
             <div className="close-confirm-actions">
               <button type="button" onClick={() => void handleClosePromptChoice('minimizeToTray')}>
                 最小化到后台并记住

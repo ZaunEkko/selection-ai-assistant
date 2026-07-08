@@ -30,14 +30,33 @@ fn provider_api_key(provider: &crate::config::AiProviderConfig) -> Result<String
 }
 
 pub fn build_prompt_messages(action: AiAction, text: &str) -> Vec<ChatMessage> {
+    build_prompt_messages_with_target(action, text, None)
+}
+
+pub fn build_prompt_messages_with_target(
+    action: AiAction,
+    text: &str,
+    target_language: Option<&str>,
+) -> Vec<ChatMessage> {
     let system = ChatMessage::system(
-        "你是一个 Windows 桌面划词 AI 助手。只根据用户提供的文本回答，不联网，不编造来源。回答使用中文。",
+        "你是一个 Windows 桌面划词 AI 助手。只根据用户提供的文本回答，不联网，不编造来源。除非翻译动作明确指定目标语言，否则回答使用中文。",
     );
+    let target_language = target_language
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
 
     let user_prompt = match action {
         AiAction::TranslateExplain => format!(
             "请把以下内容翻译成中文，并用简短语言解释重点。\n要求：\n- 先给自然中文翻译\n- 再给 2-4 条解释\n- 不要扩展不存在的信息\n\n内容：\n{text}"
         ),
+        AiAction::TranslateOnly => match target_language {
+            Some(target) => format!(
+                "请把以下内容翻译成{target}，并且只输出译文。\n要求：\n- 严格使用目标语言：{target}\n- 不要根据原文语言自动切换到其他目标语言\n- 只输出可直接替换原文的译文，不要解释，不要添加标题，不要使用 Markdown\n- 保留原文的语气、称谓、换行和标点风格\n- 不要扩展不存在的信息\n\n内容：\n{text}"
+            ),
+            None => format!(
+                "请把以下内容翻译成目标语言，并且只输出译文。\n要求：\n- 如果原文主要是中文，翻译成自然英文\n- 如果原文主要是英文或其他语言，翻译成自然中文\n- 只输出译文，不要解释，不要添加标题，不要使用 Markdown\n- 不要扩展不存在的信息\n\n内容：\n{text}"
+            ),
+        },
         AiAction::Explain => format!(
             "请解释以下内容。\n要求：\n- 用中文回答\n- 先给一句话概括\n- 再解释关键概念\n- 如果内容可能有歧义，指出歧义\n- 不要联网，不要编造来源\n\n内容：\n{text}"
         ),
@@ -141,6 +160,7 @@ pub struct RunAiActionRequest {
     pub request_id: String,
     pub action: AiAction,
     pub text: String,
+    pub target_language: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -264,7 +284,13 @@ pub async fn run_ai_action(
     let (provider, api_key) = default_provider_with_api_key(&state)?;
 
     let request_id = request.request_id.trim().to_string();
-    let messages = build_prompt_messages(request.action, request.text.trim());
+    let target_language = request
+        .target_language
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let messages =
+        build_prompt_messages_with_target(request.action, request.text.trim(), target_language);
     let response = RunAiActionResponse {
         request_id: request_id.clone(),
     };

@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
-const css = readFileSync(resolve(__dirname, '../styles.css'), 'utf8');
+const css = readFileSync(resolve(__dirname, '../styles.css'), 'utf8').replace(/\r\n/g, '\n');
 
 function blockFor(selector: string) {
   const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -21,25 +21,31 @@ describe('Settings window layout styles', () => {
     expect(settingsWindow).toMatch(/overflow-y:\s*auto/);
   });
 
-  it('uses a structured settings layout instead of plain stacked boxes', () => {
+  it('uses a structured macOS-style settings layout instead of plain stacked boxes', () => {
     const settingsHero = blockFor('.settings-hero');
     const settingsGrid = blockFor('.settings-grid');
     const providerForm = blockFor('.provider-form');
+    const settingsSection = blockFor('.settings-section');
 
-    expect(settingsHero).toMatch(/border-radius:\s*24px/);
-    expect(settingsGrid).toMatch(/grid-template-columns:\s*minmax\(0,\s*1\.35fr\)\s+minmax\(260px,\s*0\.65fr\)/);
-    expect(providerForm).toMatch(/border-radius:\s*20px/);
+    expect(settingsHero).toMatch(/background:\s*var\(--macos-bg\)/);
+    expect(settingsHero).toMatch(/border-bottom:\s*1px\s+solid\s+var\(--macos-separator\)/);
+    expect(settingsGrid).toMatch(/grid-template-columns:\s*minmax\(0,\s*1\.5fr\)\s+minmax\(280px,\s*0\.5fr\)/);
+    expect(providerForm).toMatch(/display:\s*grid/);
+    expect(settingsSection).toMatch(/border-radius:\s*10px/);
   });
 });
 
 
 describe('AI panel scroll layout styles', () => {
-  it('keeps the AI panel constrained to the window height and scrollable when manually resized smaller', () => {
+  it('keeps the AI panel constrained to the window height without letting the footer overlay content', () => {
     const aiPanel = blockFor('.ai-panel');
+    const panelBody = blockFor('.panel-body');
 
     expect(aiPanel).toMatch(/height:\s*100vh/);
     expect(aiPanel).toMatch(/min-height:\s*0/);
-    expect(aiPanel).toMatch(/overflow-y:\s*auto/);
+    expect(aiPanel).toMatch(/overflow:\s*hidden/);
+    expect(panelBody).toMatch(/min-height:\s*0/);
+    expect(panelBody).toMatch(/display:\s*grid/);
   });
 
   it('places the answer area in a shrinkable remaining-space grid row', () => {
@@ -78,7 +84,7 @@ describe('AI panel scroll layout styles', () => {
     expect(expandedSelectedText).toMatch(/max-height:\s*min\(32vh,\s*220px\)/);
     expect(expandedSelectedText).toMatch(/overflow-y:\s*auto/);
     expect(selectedTextActions).toMatch(/justify-content:\s*space-between/);
-    expect(expandButton).toMatch(/border-radius:\s*999px/);
+    expect(expandButton).toMatch(/border-radius:\s*6px/);
   });
 
   it('makes action switch buttons look like a distinct segmented tool group', () => {
@@ -86,11 +92,12 @@ describe('AI panel scroll layout styles', () => {
     const actionSwitchButton = blockFor('.action-switch-button');
     const activeActionSwitchButton = blockFor('.action-switch-button[aria-pressed="true"]');
 
-    expect(actionBar).toMatch(/border:\s*1px\s+solid\s+rgba\(148,\s*163,\s*184,\s*0\.28\)/);
-    expect(actionBar).toMatch(/background:\s*#f8fafc/);
+    expect(actionBar).toMatch(/background:\s*var\(--macos-bg\)/);
+    expect(actionBar).toMatch(/box-shadow:\s*var\(--macos-shadow-sm\)/);
     expect(actionSwitchButton).toMatch(/border:\s*0/);
-    expect(actionSwitchButton).toMatch(/border-radius:\s*999px/);
-    expect(activeActionSwitchButton).toMatch(/box-shadow:\s*0\s+8px\s+20px\s+rgba\(37,\s*99,\s*235,\s*0\.24\)/);
+    expect(actionSwitchButton).toMatch(/border-radius:\s*6px/);
+    expect(activeActionSwitchButton).toMatch(/color:\s*white/);
+    expect(activeActionSwitchButton).toMatch(/background:\s*var\(--macos-blue\)/);
   });
 
   it('styles the execute action button as a restrained primary CTA without heavy bold or shadow', () => {
@@ -100,12 +107,13 @@ describe('AI panel scroll layout styles', () => {
 
     expect(buttonRow).toMatch(/justify-content:\s*flex-end/);
     expect(executeButton).toMatch(/display:\s*inline-flex/);
-    expect(executeButton).toMatch(/border:\s*1px\s+solid\s+rgba\(37,\s*99,\s*235,\s*0\.28\)/);
-    expect(executeButton).toMatch(/color:\s*#1e40af/);
-    expect(executeButton).toMatch(/background:\s*linear-gradient\(180deg,\s*#ffffff,\s*#f8fbff\)/);
+    expect(executeButton).toMatch(/border:\s*1px\s+solid\s+rgba\(0,\s*122,\s*255,\s*0\.24\)/);
+    expect(executeButton).toMatch(/font-weight:\s*500/);
+    expect(executeButton).toMatch(/color:\s*var\(--macos-blue\)/);
+    expect(executeButton).toMatch(/background:\s*linear-gradient\(180deg,\s*rgba\(255,\s*255,\s*255,\s*0\.96\),\s*rgba\(245,\s*250,\s*255,\s*0\.96\)\)/);
     expect(executeButton).not.toMatch(/font-weight:\s*700/);
     expect(executeButton).not.toMatch(/box-shadow/);
-    expect(executeButtonHover).toMatch(/background:\s*#eff6ff/);
+    expect(executeButtonHover).toMatch(/background:\s*rgba\(0,\s*122,\s*255,\s*0\.08\)/);
     expect(executeButtonHover).not.toMatch(/transform/);
     expect(executeButtonHover).not.toMatch(/box-shadow/);
   });
@@ -126,6 +134,6 @@ describe('AI panel scroll layout styles', () => {
 
     expect(tableWrap).toMatch(/overflow-x:\s*auto/);
     expect(table).toMatch(/border-collapse:\s*collapse/);
-    expect(tableCells).toMatch(/border:\s*1px\s+solid\s+#cbd5e1/);
+    expect(tableCells).toMatch(/border:\s*1px\s+solid\s+var\(--macos-separator\)/);
   });
 });
