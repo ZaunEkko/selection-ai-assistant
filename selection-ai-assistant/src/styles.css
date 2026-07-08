@@ -1,25 +1,28 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Manrope:wght@600;700;800&display=swap');
 
 :root {
-  --macos-bg: #ffffff;
-  --macos-bg-secondary: #f5f5f7;
-  --macos-bg-tertiary: #e8e8ed;
-  --macos-separator: rgba(0, 0, 0, 0.1);
-  --macos-text: #1d1d1f;
-  --macos-text-secondary: #6e6e73;
-  --macos-blue: #007aff;
-  --macos-blue-hover: #0051d5;
-  --macos-red: #ff3b30;
-  --macos-orange: #ff9500;
-  --macos-shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.08);
-  --macos-shadow-md: 0 4px 12px rgba(0, 0, 0, 0.12);
-  --macos-shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.15);
+  --macos-bg: rgba(255, 255, 255, 0.75);
+  --macos-bg-solid: #ffffff;
+  --macos-bg-secondary: rgba(244, 244, 246, 0.65);
+  --macos-bg-tertiary: rgba(228, 228, 231, 0.6);
+  --macos-separator: rgba(0, 0, 0, 0.06);
+  --macos-text: #0f172a;
+  --macos-text-secondary: #64748b;
+  --macos-blue: #3b82f6;
+  --macos-blue-hover: #2563eb;
+  --macos-red: #ef4444;
+  --macos-orange: #f59e0b;
+  --macos-shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.04), 0 1px 2px rgba(0, 0, 0, 0.02);
+  --macos-shadow-md: 0 8px 24px rgba(0, 0, 0, 0.08), 0 2px 6px rgba(0, 0, 0, 0.04);
+  --macos-shadow-lg: 0 16px 40px rgba(0, 0, 0, 0.12), 0 4px 12px rgba(0, 0, 0, 0.06);
+  --glass-edge: inset 0 1px 1px rgba(255, 255, 255, 0.8);
+  --glass-border: 1px solid rgba(0, 0, 0, 0.06);
 
   color: var(--macos-text);
-  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Inter', system-ui, sans-serif;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
   font-size: 13px;
   font-weight: 400;
-  line-height: 1.47;
+  line-height: 1.5;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
@@ -73,19 +76,156 @@ button {
   background: transparent;
 }
 
+.replacement-preset-window {
+  box-sizing: border-box;
+  width: 100vw;
+  height: 100vh;
+  display: grid;
+  place-items: start start;
+  padding: 3px;
+  background: transparent;
+}
+
+.replacement-preset-panel {
+  box-sizing: border-box;
+  width: 254px;
+  display: grid;
+  gap: 5px;
+  padding: 8px;
+  border: var(--glass-border);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.85);
+  box-shadow: var(--macos-shadow-md), var(--glass-edge);
+  backdrop-filter: blur(40px) saturate(200%);
+  -webkit-backdrop-filter: blur(40px) saturate(200%);
+  animation: slideIn 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes slideIn {
+  from { opacity: 0; transform: translateY(-4px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.replacement-preset-strip {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.replacement-preset-current {
+  flex: 0 0 auto;
+  max-width: 64px;
+  overflow: hidden;
+  color: var(--macos-text-secondary);
+  font-size: 10px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.replacement-preset-current strong {
+  color: var(--macos-text);
+  font-weight: 600;
+}
+
+.replacement-language-options {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  gap: 3px;
+}
+
+.replacement-language-option {
+  appearance: none;
+  -webkit-appearance: none;
+  min-width: 0;
+  border: 1px solid rgba(0, 0, 0, 0.07);
+  border-radius: 999px;
+  padding: 3px 5px;
+  color: var(--macos-text-secondary);
+  background: rgba(245, 245, 247, 0.86);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.2;
+  transition: color 150ms ease, background 150ms ease, border-color 150ms ease;
+}
+
+.replacement-language-option:hover {
+  color: var(--macos-text);
+  background: rgba(232, 232, 237, 0.9);
+}
+
+.replacement-language-option[aria-pressed='true'] {
+  border-color: rgba(0, 122, 255, 0.24);
+  color: var(--macos-blue);
+  background: rgba(0, 122, 255, 0.1);
+}
+
+.replacement-custom-target {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 4px;
+}
+
+.replacement-custom-target input {
+  min-width: 0;
+  padding: 4px 7px;
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  border-radius: 999px;
+  color: var(--macos-text);
+  background: rgba(255, 255, 255, 0.88);
+  font-size: 10px;
+}
+
+.replacement-custom-target input:focus {
+  outline: none;
+  border-color: rgba(0, 122, 255, 0.48);
+}
+
+.replacement-custom-target button {
+  appearance: none;
+  -webkit-appearance: none;
+  border: 0;
+  border-radius: 999px;
+  padding: 4px 8px;
+  color: white;
+  background: var(--macos-blue);
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.replacement-custom-target button:disabled {
+  opacity: 0.58;
+}
+
+.replacement-preset-message {
+  margin: 0;
+  padding: 0 5px;
+  overflow: hidden;
+  color: var(--macos-text-secondary);
+  font-size: 10px;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.replacement-preset-message[role='alert'] {
+  color: var(--macos-red);
+}
+
 .mini-action-bar {
   display: flex;
   align-items: center;
   min-width: 228px;
-  min-height: 34px;
+  min-height: 38px;
   gap: 0;
-  padding: 3px;
-  border: 1px solid rgba(0, 0, 0, 0.07);
+  padding: 4px;
+  border: var(--glass-border);
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.94);
-  box-shadow: 0 5px 18px rgba(0, 0, 0, 0.13), 0 1px 2px rgba(0, 0, 0, 0.06);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
+  background: rgba(255, 255, 255, 0.85);
+  box-shadow: var(--macos-shadow-md), var(--glass-edge);
+  backdrop-filter: blur(40px) saturate(200%);
+  -webkit-backdrop-filter: blur(40px) saturate(200%);
 }
 
 .mini-action-button {
@@ -103,7 +243,7 @@ button {
   font-weight: 600;
   color: var(--macos-text);
   background: transparent;
-  transition: background 150ms ease, color 150ms ease, transform 150ms ease;
+  transition: all 0.2s cubic-bezier(0.25, 1, 0.5, 1);
   cursor: pointer;
 }
 
@@ -122,8 +262,8 @@ button {
 }
 
 .mini-action-button:active {
-  transform: scale(0.98);
-  background: rgba(0, 0, 0, 0.1);
+  transform: scale(0.92);
+  background: rgba(0, 0, 0, 0.08);
 }
 
 .mini-action-button:focus-visible {
@@ -157,23 +297,24 @@ button {
   height: 44px;
   margin: 0;
   padding: 0;
-  border: 0;
+  border: 1px solid rgba(255,255,255,0.2);
   border-radius: 22px;
   display: grid;
   place-items: center;
   color: white;
-  background: linear-gradient(135deg, #007aff 0%, #5ac8fa 100%);
-  box-shadow: 0 4px 16px rgba(0, 122, 255, 0.32);
-  transition: all 200ms cubic-bezier(0.25, 0.1, 0.25, 1);
+  background: linear-gradient(135deg, var(--macos-blue) 0%, #60a5fa 100%);
+  box-shadow: 0 8px 16px rgba(59, 130, 246, 0.25), inset 0 1px 1px rgba(255,255,255,0.4);
+  transition: all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 
 .floating-ai-button:hover {
-  transform: scale(1.08);
-  box-shadow: 0 6px 20px rgba(0, 122, 255, 0.4);
+  transform: scale(1.08) translateY(-2px);
+  box-shadow: 0 12px 24px rgba(59, 130, 246, 0.35), inset 0 1px 1px rgba(255,255,255,0.4);
 }
 
 .floating-ai-button:active {
-  transform: scale(0.96);
+  transform: scale(0.92);
+  box-shadow: 0 4px 8px rgba(59, 130, 246, 0.2), inset 0 1px 1px rgba(255,255,255,0.4);
 }
 
 .floating-ai-button:focus-visible {
@@ -203,10 +344,11 @@ button {
   grid-template-rows: auto auto auto minmax(0, 1fr) auto;
   gap: 0;
   padding: 0;
-  overflow-y: auto;
-  overflow-x: hidden;
+  overflow: hidden;
   color: var(--macos-text);
   background: var(--macos-bg-secondary);
+  backdrop-filter: blur(40px) saturate(180%);
+  -webkit-backdrop-filter: blur(40px) saturate(180%);
 }
 
 .panel-header {
@@ -401,27 +543,32 @@ button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border: 1px solid rgba(0, 122, 255, 0.24);
+  border: var(--glass-border);
   border-radius: 8px;
   padding: 8px 16px;
   font-size: 13px;
   font-weight: 500;
   color: var(--macos-blue);
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(245, 250, 255, 0.96));
-  transition: background 150ms ease, border-color 150ms ease;
+  background: linear-gradient(180deg, #ffffff, rgba(245, 250, 255, 0.96));
+  box-shadow: var(--macos-shadow-sm);
+  transition: all 0.2s cubic-bezier(0.25, 1, 0.5, 1);
 }
 
 .execute-action-button:hover {
-  border-color: rgba(0, 122, 255, 0.32);
-  background: rgba(0, 122, 255, 0.08);
+  border-color: rgba(59, 130, 246, 0.32);
+  background: rgba(59, 130, 246, 0.04);
+  transform: translateY(-1px);
+  box-shadow: var(--macos-shadow-md);
 }
 
 .execute-action-button:active {
-  background: rgba(0, 122, 255, 0.12);
+  background: rgba(59, 130, 246, 0.08);
+  transform: scale(0.96);
 }
 
 .panel-body {
   min-height: 0;
+  display: grid;
   margin: 0 16px 12px;
 }
 
@@ -569,18 +716,25 @@ button {
 
 .panel-footer button {
   appearance: none;
-  border: 0;
+  border: 1px solid rgba(255,255,255,0.1);
   border-radius: 8px;
   padding: 8px 16px;
   font-size: 13px;
   font-weight: 600;
   color: white;
-  background: var(--macos-blue);
-  transition: background 150ms ease;
+  background: linear-gradient(180deg, #60a5fa, var(--macos-blue));
+  box-shadow: 0 2px 6px rgba(59, 130, 246, 0.25), inset 0 1px 0 rgba(255,255,255,0.2);
+  transition: all 0.2s cubic-bezier(0.25, 1, 0.5, 1);
 }
 
 .panel-footer button:hover {
-  background: var(--macos-blue-hover);
+  background: linear-gradient(180deg, #93c5fd, #2563eb);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.35), inset 0 1px 0 rgba(255,255,255,0.2);
+}
+
+.panel-footer button:active {
+  transform: scale(0.96);
 }
 
 /* ===== Settings Window ===== */
@@ -597,6 +751,8 @@ button {
   overflow-x: hidden;
   color: var(--macos-text);
   background: var(--macos-bg-secondary);
+  backdrop-filter: blur(40px) saturate(180%);
+  -webkit-backdrop-filter: blur(40px) saturate(180%);
 }
 
 .settings-window::-webkit-scrollbar {
@@ -1164,12 +1320,12 @@ button {
   padding: 0;
   overflow: hidden;
   color: var(--macos-text);
-  border: 1px solid rgba(0, 0, 0, 0.07);
+  border: var(--glass-border);
   border-radius: 12px;
-  background: rgba(255, 255, 255, 0.94);
-  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.12), 0 1px 2px rgba(0, 0, 0, 0.05);
-  backdrop-filter: blur(18px);
-  -webkit-backdrop-filter: blur(18px);
+  background: rgba(255, 255, 255, 0.85);
+  box-shadow: var(--macos-shadow-lg), var(--glass-edge);
+  backdrop-filter: blur(40px) saturate(200%);
+  -webkit-backdrop-filter: blur(40px) saturate(200%);
 }
 
 .translate-result-header {
@@ -1252,3 +1408,4 @@ button {
   font-size: 13px;
   color: var(--macos-text-secondary);
 }
+

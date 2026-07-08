@@ -62,12 +62,44 @@ impl Default for CloseButtonBehavior {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub enum ReplacementTargetLanguage {
+    Auto,
+    Chinese,
+    English,
+    Japanese,
+    Korean,
+    Custom,
+}
+
+impl Default for ReplacementTargetLanguage {
+    fn default() -> Self {
+        Self::Auto
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
 pub struct AppBehaviorConfig {
     pub hotkey: String,
     pub start_minimized_to_tray: bool,
     pub close_button_behavior: CloseButtonBehavior,
+    pub replacement_target_language: ReplacementTargetLanguage,
+    pub replacement_custom_target: String,
+}
+
+impl Default for AppBehaviorConfig {
+    fn default() -> Self {
+        let config = AppConfig::default();
+        Self {
+            hotkey: config.hotkey,
+            start_minimized_to_tray: config.start_minimized_to_tray,
+            close_button_behavior: config.close_button_behavior,
+            replacement_target_language: config.replacement_target_language,
+            replacement_custom_target: config.replacement_custom_target,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -86,6 +118,8 @@ pub struct AppConfig {
     pub manual_hotkey_always_enabled: bool,
     pub start_minimized_to_tray: bool,
     pub close_button_behavior: CloseButtonBehavior,
+    pub replacement_target_language: ReplacementTargetLanguage,
+    pub replacement_custom_target: String,
     pub disabled_apps: Vec<String>,
 }
 
@@ -105,6 +139,8 @@ impl Default for AppConfig {
             manual_hotkey_always_enabled: true,
             start_minimized_to_tray: false,
             close_button_behavior: CloseButtonBehavior::Ask,
+            replacement_target_language: ReplacementTargetLanguage::Auto,
+            replacement_custom_target: String::new(),
             disabled_apps: vec![
                 "1Password.exe".to_string(),
                 "KeePassXC.exe".to_string(),

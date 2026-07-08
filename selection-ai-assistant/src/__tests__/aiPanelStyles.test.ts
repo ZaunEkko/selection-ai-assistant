@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
-const css = readFileSync(resolve(__dirname, '../styles.css'), 'utf8');
+const css = readFileSync(resolve(__dirname, '../styles.css'), 'utf8').replace(/\r\n/g, '\n');
 
 function blockFor(selector: string) {
   const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -37,12 +37,15 @@ describe('Settings window layout styles', () => {
 
 
 describe('AI panel scroll layout styles', () => {
-  it('keeps the AI panel constrained to the window height and scrollable when manually resized smaller', () => {
+  it('keeps the AI panel constrained to the window height without letting the footer overlay content', () => {
     const aiPanel = blockFor('.ai-panel');
+    const panelBody = blockFor('.panel-body');
 
     expect(aiPanel).toMatch(/height:\s*100vh/);
     expect(aiPanel).toMatch(/min-height:\s*0/);
-    expect(aiPanel).toMatch(/overflow-y:\s*auto/);
+    expect(aiPanel).toMatch(/overflow:\s*hidden/);
+    expect(panelBody).toMatch(/min-height:\s*0/);
+    expect(panelBody).toMatch(/display:\s*grid/);
   });
 
   it('places the answer area in a shrinkable remaining-space grid row', () => {

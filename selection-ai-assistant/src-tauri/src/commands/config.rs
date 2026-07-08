@@ -42,6 +42,8 @@ pub fn save_app_behavior_config_in_state(
     candidate.hotkey = preferences.hotkey.trim().to_string();
     candidate.start_minimized_to_tray = preferences.start_minimized_to_tray;
     candidate.close_button_behavior = preferences.close_button_behavior;
+    candidate.replacement_target_language = preferences.replacement_target_language;
+    candidate.replacement_custom_target = preferences.replacement_custom_target.trim().to_string();
 
     if let Some(path) = &state.settings_path {
         candidate.save_to_path(path).map_err(|err| PublicError {
@@ -67,6 +69,8 @@ pub fn confirm_main_window_close(
             hotkey: current.hotkey,
             start_minimized_to_tray: current.start_minimized_to_tray,
             close_button_behavior: behavior,
+            replacement_target_language: current.replacement_target_language,
+            replacement_custom_target: current.replacement_custom_target,
         },
     )?;
 

@@ -137,6 +137,33 @@ pub struct VisibleFloatingButton {
     pub window_position: Point,
     pub selection_anchor: Point,
     pub selection_rect: Option<Rect>,
+    pub scroll_follow_enabled: bool,
+}
+
+pub fn should_follow_scroll_for_source(source_app: &str, _window_title: &str) -> bool {
+    !is_browser_process(source_app)
+}
+
+fn is_browser_process(source_app: &str) -> bool {
+    let process_name = source_app
+        .rsplit(|ch| ch == '\\' || ch == '/')
+        .next()
+        .unwrap_or(source_app)
+        .trim()
+        .to_ascii_lowercase();
+
+    matches!(
+        process_name.as_str(),
+        "chrome.exe"
+            | "chromium.exe"
+            | "msedge.exe"
+            | "firefox.exe"
+            | "brave.exe"
+            | "vivaldi.exe"
+            | "opera.exe"
+            | "opera_gx.exe"
+            | "iexplore.exe"
+    )
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]

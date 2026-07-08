@@ -73,16 +73,16 @@ pub fn place_toolbar_near_selection(
             y: selection.y - size.height - gap,
         },
         Point {
+            x: selection.x,
+            y: selection.y + selection.height + gap,
+        },
+        Point {
             x: selection.x + selection.width + gap,
             y: selection.y - 4.0,
         },
         Point {
             x: selection.x - size.width - gap,
             y: selection.y - 4.0,
-        },
-        Point {
-            x: selection.x,
-            y: selection.y + selection.height + gap,
         },
     ];
 
