@@ -1,4 +1,6 @@
-use selection_ai_assistant_lib::config::{AiProviderKind, AppConfig, CloseButtonBehavior};
+use selection_ai_assistant_lib::config::{
+    AiProviderKind, AppConfig, CloseButtonBehavior, ReplacementTargetLanguage,
+};
 
 #[test]
 fn release_binary_uses_windows_subsystem_to_avoid_console_window() {
@@ -14,7 +16,7 @@ fn release_binary_uses_windows_subsystem_to_avoid_console_window() {
 }
 
 #[test]
-fn source_text_window_has_tauri_capability_permissions() {
+fn overlay_windows_have_tauri_capability_permissions() {
     let capabilities_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("capabilities")
         .join("default.json");
@@ -26,10 +28,12 @@ fn source_text_window_has_tauri_capability_permissions() {
         .as_array()
         .expect("capability windows should be an array");
 
-    assert!(
-        windows.iter().any(|window| window.as_str() == Some("source-text")),
-        "source-text window needs capability access to listen for source_text_context and invoke latest source recovery"
-    );
+    for label in ["source-text", "translate-result"] {
+        assert!(
+            windows.iter().any(|window| window.as_str() == Some(label)),
+            "{label} window needs capability access to listen for events and invoke window commands"
+        );
+    }
 }
 
 #[test]
@@ -83,6 +87,11 @@ fn default_config_contains_privacy_defaults() {
     assert!(config.manual_hotkey_always_enabled);
     assert!(!config.start_minimized_to_tray);
     assert_eq!(config.close_button_behavior, CloseButtonBehavior::Ask);
+    assert_eq!(
+        config.replacement_target_language,
+        ReplacementTargetLanguage::Auto
+    );
+    assert_eq!(config.replacement_custom_target, "");
     assert!(config.is_disabled_process("Bitwarden.exe"));
     assert!(config.is_disabled_process("bitwarden.exe"));
 }
@@ -116,4 +125,9 @@ fn settings_schema_defaults_missing_fields_for_backward_compatibility() {
     assert!(config.manual_hotkey_always_enabled);
     assert!(!config.start_minimized_to_tray);
     assert_eq!(config.close_button_behavior, CloseButtonBehavior::Ask);
+    assert_eq!(
+        config.replacement_target_language,
+        ReplacementTargetLanguage::Auto
+    );
+    assert_eq!(config.replacement_custom_target, "");
 }

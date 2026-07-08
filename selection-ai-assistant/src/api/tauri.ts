@@ -15,10 +15,14 @@ export type AiProviderConfig = {
 };
 
 export type CloseButtonBehavior = 'ask' | 'minimizeToTray' | 'exitApp';
+export type ReplacementTargetLanguage = 'auto' | 'chinese' | 'english' | 'japanese' | 'korean' | 'custom';
 
 export type AppBehaviorConfig = {
+  hotkey: string;
   startMinimizedToTray: boolean;
   closeButtonBehavior: CloseButtonBehavior;
+  replacementTargetLanguage: ReplacementTargetLanguage;
+  replacementCustomTarget: string;
 };
 
 export type AppConfig = {
@@ -35,6 +39,8 @@ export type AppConfig = {
   manualHotkeyAlwaysEnabled: boolean;
   startMinimizedToTray: boolean;
   closeButtonBehavior: CloseButtonBehavior;
+  replacementTargetLanguage: ReplacementTargetLanguage;
+  replacementCustomTarget: string;
   disabledApps: string[];
 };
 
@@ -66,6 +72,14 @@ export function saveProviderConfig(provider: AiProviderConfig): Promise<AppConfi
   return invoke<AppConfig>('save_provider_config', { provider });
 }
 
+export function setDefaultProvider(providerId: string): Promise<AppConfig> {
+  return invoke<AppConfig>('set_default_provider', { providerId });
+}
+
+export function deleteProvider(providerId: string): Promise<AppConfig> {
+  return invoke<AppConfig>('delete_provider', { providerId });
+}
+
 export function saveAppBehaviorConfig(preferences: AppBehaviorConfig): Promise<AppConfig> {
   return invoke<AppConfig>('save_app_behavior_config', { preferences });
 }
@@ -90,6 +104,7 @@ export function testProviderConnection(provider: AiProviderConfig): Promise<Test
 
 export type UiAction =
   | 'translateExplain'
+  | 'translateOnly'
   | 'explain'
   | 'summarize'
   | 'codeExplain'
@@ -97,23 +112,39 @@ export type UiAction =
   | 'expandPrompt'
   | 'menuFallback';
 
+export type Point = {
+  x: number;
+  y: number;
+};
+
+export type Rect = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+};
+
 export type PanelContext = {
   selection: {
     id?: string;
     text: string;
     sourceApp: string;
     windowTitle: string;
+    anchorRect?: Rect | null;
+    fallbackPoint?: Point;
+    selectionRects?: Rect[];
+    explicitAnchor?: Point | null;
   };
   action: UiAction;
   autoRun?: boolean;
 };
 
-export type Point = {
-  x: number;
-  y: number;
-};
-
-export function runAiAction(request: { requestId: string; action: UiAction; text: string }): Promise<{ requestId: string }> {
+export function runAiAction(request: {
+  requestId: string;
+  action: UiAction;
+  text: string;
+  targetLanguage?: string;
+}): Promise<{ requestId: string }> {
   return invoke<{ requestId: string }>('run_ai_action', { request });
 }
 
@@ -158,12 +189,55 @@ export function startDragSourceTextWindow(): Promise<void> {
   return getCurrentWindow().startDragging();
 }
 
+export function startDragTranslateResultWindow(): Promise<void> {
+  return getCurrentWindow().startDragging();
+}
+
+export type WindowResizeDirection =
+  | 'East'
+  | 'North'
+  | 'NorthEast'
+  | 'NorthWest'
+  | 'South'
+  | 'SouthEast'
+  | 'SouthWest'
+  | 'West';
+
+export function startResizeTranslateResultWindow(direction: WindowResizeDirection = 'SouthEast'): Promise<void> {
+  return getCurrentWindow().startResizeDragging(direction);
+}
+
 export function showAiPanel(position: Point): Promise<void> {
   return invoke<void>('show_ai_panel', { position });
 }
 
 export function hideFloatingButton(): Promise<void> {
   return invoke<void>('hide_floating_button');
+}
+
+export function showReplacementPresetPanel(): Promise<void> {
+  return invoke<void>('show_replacement_preset_panel');
+}
+
+export function hideReplacementPresetPanel(): Promise<void> {
+  return invoke<void>('hide_replacement_preset_panel');
+}
+
+export function showTranslateResult(
+  position: Point,
+  originalText: string,
+  translatedText: string,
+  selectionRects: Rect[] = [],
+): Promise<void> {
+  return invoke<void>('show_translate_result', { position, originalText, translatedText, selectionRects });
+}
+
+export function hideTranslateResult(): Promise<void> {
+  return invoke<void>('hide_translate_result');
+}
+
+export function replaceSelectedText(text: string, selectionId?: string): Promise<void> {
+  return invoke<void>('replace_selected_text', { text, selectionId });
 }
 
 export async function openPanelFromFloatingButton(): Promise<void> {
@@ -195,4 +269,8 @@ export function formatCommandError(err: unknown): string {
     return message;
   }
   return String(err);
+}
+
+export function copyToClipboard(text: string): Promise<void> {
+  return invoke<void>('copy_to_clipboard', { text });
 }

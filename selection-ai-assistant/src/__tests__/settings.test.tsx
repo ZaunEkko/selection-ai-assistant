@@ -84,6 +84,8 @@ const config: AppConfig = {
   manualHotkeyAlwaysEnabled: true,
   startMinimizedToTray: false,
   closeButtonBehavior: 'ask',
+  replacementTargetLanguage: 'auto',
+  replacementCustomTarget: '',
   disabledApps: ['1Password.exe', 'KeePassXC.exe', 'Bitwarden.exe', 'mstsc.exe', 'AnyDesk.exe', 'TeamViewer.exe'],
 };
 
@@ -166,9 +168,10 @@ describe('Settings', () => {
     expect(screen.getByText(/Wayland 默认限制更强/)).toBeInTheDocument();
   });
 
-  it('saves startup and close button behavior preferences', async () => {
+  it('saves startup, close button behavior, and manual hotkey preferences', async () => {
     const nextConfig: AppConfig = {
       ...config,
+      hotkey: 'Ctrl+Alt+T',
       startMinimizedToTray: true,
       closeButtonBehavior: 'exitApp',
     };
@@ -178,20 +181,25 @@ describe('Settings', () => {
 
     fireEvent.click(screen.getByLabelText('启动时最小化到后台'));
     fireEvent.change(screen.getByLabelText('关闭按钮行为'), { target: { value: 'exitApp' } });
-    fireEvent.click(screen.getByRole('button', { name: '保存启动与关闭设置' }));
+    fireEvent.change(screen.getByLabelText('手动快捷键'), { target: { value: 'Ctrl+Alt+T' } });
+    fireEvent.click(screen.getByRole('button', { name: '保存启动、关闭与快捷键设置' }));
 
     expect(screen.getByRole('button', { name: '正在保存设置…' })).toBeDisabled();
-    expect(screen.getByRole('status')).toHaveTextContent('正在保存启动与关闭设置…');
+    expect(screen.getByRole('status')).toHaveTextContent('正在保存启动、关闭与快捷键设置…');
 
     await waitFor(() => {
       expect(saveAppBehaviorConfigMock).toHaveBeenCalledWith({
+        hotkey: 'Ctrl+Alt+T',
         startMinimizedToTray: true,
         closeButtonBehavior: 'exitApp',
+        replacementTargetLanguage: 'auto',
+        replacementCustomTarget: '',
       });
     });
+    expect(screen.getByLabelText('手动快捷键')).toHaveValue('Ctrl+Alt+T');
     expect(screen.getByLabelText('启动时最小化到后台')).toBeChecked();
     expect(screen.getByLabelText('关闭按钮行为')).toHaveValue('exitApp');
-    expect(screen.getByRole('status')).toHaveTextContent('已保存启动与关闭设置。');
+    expect(screen.getByRole('status')).toHaveTextContent('已保存启动、关闭与快捷键设置。');
   });
 
   it('prompts on the first main window close request and remembers the selected close behavior', async () => {
