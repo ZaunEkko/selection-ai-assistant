@@ -35,6 +35,7 @@ fn save_app_behavior_config_updates_startup_and_close_preferences() {
         &state,
         AppBehaviorConfig {
             hotkey: "Ctrl+Alt+T".to_string(),
+            launch_at_startup: true,
             start_minimized_to_tray: true,
             close_button_behavior: CloseButtonBehavior::ExitApp,
             replacement_target_language: ReplacementTargetLanguage::Korean,
@@ -44,6 +45,7 @@ fn save_app_behavior_config_updates_startup_and_close_preferences() {
     .expect("app behavior config should save");
 
     assert_eq!(config.hotkey, "Ctrl+Alt+T");
+    assert!(config.launch_at_startup);
     assert!(config.start_minimized_to_tray);
     assert_eq!(config.close_button_behavior, CloseButtonBehavior::ExitApp);
     assert_eq!(
@@ -54,6 +56,7 @@ fn save_app_behavior_config_updates_startup_and_close_preferences() {
 
     let stored = get_config_from_state(&state).expect("config should be readable");
     assert_eq!(stored.hotkey, "Ctrl+Alt+T");
+    assert!(stored.launch_at_startup);
     assert!(stored.start_minimized_to_tray);
     assert_eq!(stored.close_button_behavior, CloseButtonBehavior::ExitApp);
     assert_eq!(
@@ -73,6 +76,7 @@ fn save_app_behavior_config_persists_to_settings_file() {
         &state,
         AppBehaviorConfig {
             hotkey: "Ctrl+Alt+K".to_string(),
+            launch_at_startup: true,
             start_minimized_to_tray: true,
             close_button_behavior: CloseButtonBehavior::MinimizeToTray,
             replacement_target_language: ReplacementTargetLanguage::Custom,
@@ -83,6 +87,7 @@ fn save_app_behavior_config_persists_to_settings_file() {
 
     let loaded = AppConfig::load_from_path(&path).expect("settings should load from disk");
     assert_eq!(loaded.hotkey, "Ctrl+Alt+K");
+    assert!(loaded.launch_at_startup);
     assert!(loaded.start_minimized_to_tray);
     assert_eq!(
         loaded.close_button_behavior,

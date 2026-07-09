@@ -6,7 +6,10 @@ import {
   getPlatformCapabilities,
   listProviderModels,
   openPanelFromFloatingButton,
+  runScreenshotTranslate,
+  cancelScreenshotTranslate,
   saveProviderConfig,
+  showScreenshotOverlay,
   startDragAiPanel,
   testProviderConnection,
   type AiProviderConfig,
@@ -121,6 +124,24 @@ describe('Tauri API wrappers', () => {
     await expect(getPlatformCapabilities()).resolves.toEqual(capabilities);
 
     expect(invokeMock).toHaveBeenCalledWith('get_platform_capabilities');
+  });
+
+  it('invokes screenshot translation commands with expected payloads', async () => {
+    const position = { x: 120, y: 80 };
+    const request = {
+      requestId: 'screenshot-1',
+      rect: { x: 10, y: 20, width: 180, height: 90 },
+      viewportSize: { width: 800, height: 600 },
+    };
+    invokeMock.mockResolvedValueOnce(undefined).mockResolvedValueOnce({ requestId: 'screenshot-1' }).mockResolvedValueOnce(undefined);
+
+    await showScreenshotOverlay(position);
+    await expect(runScreenshotTranslate(request)).resolves.toEqual({ requestId: 'screenshot-1' });
+    await cancelScreenshotTranslate();
+
+    expect(invokeMock).toHaveBeenNthCalledWith(1, 'show_screenshot_overlay', { position });
+    expect(invokeMock).toHaveBeenNthCalledWith(2, 'run_screenshot_translate', { request });
+    expect(invokeMock).toHaveBeenNthCalledWith(3, 'cancel_screenshot_translate');
   });
 
   it('formats common command errors in Chinese while keeping safe details', () => {
