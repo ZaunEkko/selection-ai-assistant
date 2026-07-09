@@ -754,6 +754,13 @@ describe('AiPanel Tauri event lifecycle', () => {
       expect(invokeMock).toHaveBeenCalledWith('show_source_text_window', { text: 'hello world' });
     });
     expect(screen.queryByRole('region', { name: '左侧原文' })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: '关闭左侧原文' }));
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith('hide_source_text_window');
+    });
+    expect(screen.getByRole('button', { name: '在左侧窗口打开原文' })).toHaveAttribute('aria-pressed', 'false');
     expect(invokeMock).not.toHaveBeenCalledWith('run_ai_action', expect.anything());
     expect(invokeMock).not.toHaveBeenCalledWith('run_ai_follow_up', expect.anything());
   });

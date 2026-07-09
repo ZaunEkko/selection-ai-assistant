@@ -4,6 +4,7 @@ import {
   formatCommandError,
   getLatestPanelContext,
   hideAiPanel,
+  hideSourceTextWindow,
   runAiAction,
   runAiFollowUp,
   showSourceTextWindow,
@@ -46,6 +47,7 @@ export function AiPanel() {
   const [selectedText, setSelectedText] = useState('');
   const [selectedSelectionId, setSelectedSelectionId] = useState<string | null>(null);
   const [selectedTextExpanded, setSelectedTextExpanded] = useState(false);
+  const [sourceWindowOpen, setSourceWindowOpen] = useState(false);
   const [question, setQuestion] = useState('');
   const [error, setError] = useState<string | null>(null);
   const activeRequestId = useRef<string | null>(null);
@@ -150,6 +152,7 @@ export function AiPanel() {
     selectedTextRef.current = text;
     selectedSelectionIdRef.current = context.selection.id ?? null;
     setSelectedTextExpanded(false);
+    setSourceWindowOpen(false);
     setActiveAction(action);
     setError(null);
     return { action, text, selectionId: context.selection.id ?? null };
@@ -296,6 +299,16 @@ export function AiPanel() {
   }
 
   async function openSourceWindow() {
+    if (sourceWindowOpen) {
+      try {
+        await hideSourceTextWindow();
+        setSourceWindowOpen(false);
+      } catch (err) {
+        setError(formatCommandError(err));
+      }
+      return;
+    }
+
     let text = selectedText;
 
     if (selectedSelectionId) {
@@ -316,6 +329,7 @@ export function AiPanel() {
 
     try {
       await showSourceTextWindow(text);
+      setSourceWindowOpen(true);
     } catch (err) {
       setError(formatCommandError(err));
     }
@@ -361,8 +375,8 @@ export function AiPanel() {
         <div className="selected-text-card-header">
           <strong>选中文本</strong>
           {hasSelectedText && (
-            <button type="button" className="source-window-button" onClick={openSourceWindow}>
-              在左侧窗口打开原文
+            <button type="button" className="source-window-button" aria-pressed={sourceWindowOpen} onClick={openSourceWindow}>
+              {sourceWindowOpen ? '关闭左侧原文' : '在左侧窗口打开原文'}
             </button>
           )}
         </div>

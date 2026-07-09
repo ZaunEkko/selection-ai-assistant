@@ -93,6 +93,11 @@ fn default_config_contains_privacy_defaults() {
         ReplacementTargetLanguage::Auto
     );
     assert_eq!(config.replacement_custom_target, "");
+    assert_eq!(
+        config.translation_target_language,
+        ReplacementTargetLanguage::Auto
+    );
+    assert_eq!(config.translation_custom_target, "");
     assert!(config.is_disabled_process("Bitwarden.exe"));
     assert!(config.is_disabled_process("bitwarden.exe"));
 }
@@ -132,4 +137,9 @@ fn settings_schema_defaults_missing_fields_for_backward_compatibility() {
         ReplacementTargetLanguage::Auto
     );
     assert_eq!(config.replacement_custom_target, "");
+    assert_eq!(
+        config.translation_target_language,
+        ReplacementTargetLanguage::Auto
+    );
+    assert_eq!(config.translation_custom_target, "");
 }

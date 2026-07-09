@@ -40,6 +40,8 @@ fn save_app_behavior_config_updates_startup_and_close_preferences() {
             close_button_behavior: CloseButtonBehavior::ExitApp,
             replacement_target_language: ReplacementTargetLanguage::Korean,
             replacement_custom_target: "韩语敬语".to_string(),
+            translation_target_language: ReplacementTargetLanguage::MorseCode,
+            translation_custom_target: "甲骨文风格".to_string(),
         },
     )
     .expect("app behavior config should save");
@@ -53,6 +55,11 @@ fn save_app_behavior_config_updates_startup_and_close_preferences() {
         ReplacementTargetLanguage::Korean
     );
     assert_eq!(config.replacement_custom_target, "韩语敬语");
+    assert_eq!(
+        config.translation_target_language,
+        ReplacementTargetLanguage::MorseCode
+    );
+    assert_eq!(config.translation_custom_target, "甲骨文风格");
 
     let stored = get_config_from_state(&state).expect("config should be readable");
     assert_eq!(stored.hotkey, "Ctrl+Alt+T");
@@ -64,6 +71,11 @@ fn save_app_behavior_config_updates_startup_and_close_preferences() {
         ReplacementTargetLanguage::Korean
     );
     assert_eq!(stored.replacement_custom_target, "韩语敬语");
+    assert_eq!(
+        stored.translation_target_language,
+        ReplacementTargetLanguage::MorseCode
+    );
+    assert_eq!(stored.translation_custom_target, "甲骨文风格");
 }
 
 #[test]
@@ -81,6 +93,8 @@ fn save_app_behavior_config_persists_to_settings_file() {
             close_button_behavior: CloseButtonBehavior::MinimizeToTray,
             replacement_target_language: ReplacementTargetLanguage::Custom,
             replacement_custom_target: "日文自然口语".to_string(),
+            translation_target_language: ReplacementTargetLanguage::Custom,
+            translation_custom_target: "象形文字".to_string(),
         },
     )
     .expect("app behavior config should save");
@@ -98,6 +112,11 @@ fn save_app_behavior_config_persists_to_settings_file() {
         ReplacementTargetLanguage::Custom
     );
     assert_eq!(loaded.replacement_custom_target, "日文自然口语");
+    assert_eq!(
+        loaded.translation_target_language,
+        ReplacementTargetLanguage::Custom
+    );
+    assert_eq!(loaded.translation_custom_target, "象形文字");
 }
 
 #[test]

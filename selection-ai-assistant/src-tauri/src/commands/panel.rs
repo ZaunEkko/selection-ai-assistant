@@ -14,8 +14,8 @@ const FLOATING_BUTTON_SIZE: WindowSize = WindowSize {
     height: 44.0,
 };
 const REPLACEMENT_PRESET_SIZE: WindowSize = WindowSize {
-    width: 260.0,
-    height: 92.0,
+    width: 420.0,
+    height: 126.0,
 };
 const AI_PANEL_FALLBACK_SIZE: WindowSize = WindowSize {
     width: 420.0,
@@ -30,6 +30,19 @@ const TRANSLATE_RESULT_SIZE: WindowSize = WindowSize {
     height: 180.0,
 };
 const SOURCE_TEXT_WINDOW_GAP: f64 = 12.0;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TargetPresetKind {
+    Replacement,
+    Translation,
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TargetPresetContext {
+    pub kind: TargetPresetKind,
+}
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -204,6 +217,7 @@ fn assistant_window_rects(app: &AppHandle) -> Vec<Rect> {
         "ai-panel",
         "source-text",
         "translate-result",
+        "screenshot-overlay",
     ]
     .into_iter()
     .filter_map(|label| app.get_webview_window(label))
@@ -291,7 +305,10 @@ pub fn hide_floating_button(app: AppHandle) -> Result<(), PublicError> {
 }
 
 #[tauri::command]
-pub fn show_replacement_preset_panel(app: AppHandle) -> Result<(), PublicError> {
+pub fn show_replacement_preset_panel(
+    app: AppHandle,
+    kind: TargetPresetKind,
+) -> Result<(), PublicError> {
     let window = app
         .get_webview_window("replacement-preset")
         .ok_or_else(|| PublicError {
@@ -304,6 +321,9 @@ pub fn show_replacement_preset_panel(app: AppHandle) -> Result<(), PublicError> 
     window
         .show()
         .map_err(|err| command_error("show_failed", err))?;
+    window
+        .emit("target_preset_context", TargetPresetContext { kind })
+        .map_err(|err| command_error("emit_failed", err))?;
     Ok(())
 }
 

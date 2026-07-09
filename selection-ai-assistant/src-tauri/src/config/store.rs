@@ -70,6 +70,10 @@ pub enum ReplacementTargetLanguage {
     English,
     Japanese,
     Korean,
+    ClassicalChinese,
+    OracleBone,
+    Pictograph,
+    MorseCode,
     Custom,
 }
 
@@ -88,6 +92,8 @@ pub struct AppBehaviorConfig {
     pub close_button_behavior: CloseButtonBehavior,
     pub replacement_target_language: ReplacementTargetLanguage,
     pub replacement_custom_target: String,
+    pub translation_target_language: ReplacementTargetLanguage,
+    pub translation_custom_target: String,
 }
 
 impl Default for AppBehaviorConfig {
@@ -100,6 +106,8 @@ impl Default for AppBehaviorConfig {
             close_button_behavior: config.close_button_behavior,
             replacement_target_language: config.replacement_target_language,
             replacement_custom_target: config.replacement_custom_target,
+            translation_target_language: config.translation_target_language,
+            translation_custom_target: config.translation_custom_target,
         }
     }
 }
@@ -123,6 +131,8 @@ pub struct AppConfig {
     pub close_button_behavior: CloseButtonBehavior,
     pub replacement_target_language: ReplacementTargetLanguage,
     pub replacement_custom_target: String,
+    pub translation_target_language: ReplacementTargetLanguage,
+    pub translation_custom_target: String,
     pub disabled_apps: Vec<String>,
 }
 
@@ -145,6 +155,8 @@ impl Default for AppConfig {
             close_button_behavior: CloseButtonBehavior::Ask,
             replacement_target_language: ReplacementTargetLanguage::Auto,
             replacement_custom_target: String::new(),
+            translation_target_language: ReplacementTargetLanguage::Auto,
+            translation_custom_target: String::new(),
             disabled_apps: vec![
                 "1Password.exe".to_string(),
                 "KeePassXC.exe".to_string(),
