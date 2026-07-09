@@ -88,9 +88,9 @@ button {
 
 .replacement-preset-panel {
   box-sizing: border-box;
-  width: 254px;
+  width: 414px;
   display: grid;
-  gap: 5px;
+  gap: 6px;
   padding: 8px;
   border: var(--glass-border);
   border-radius: 12px;
@@ -114,7 +114,7 @@ button {
 
 .replacement-preset-current {
   flex: 0 0 auto;
-  max-width: 64px;
+  max-width: 84px;
   overflow: hidden;
   color: var(--macos-text-secondary);
   font-size: 10px;
@@ -133,6 +133,7 @@ button {
   flex: 1 1 auto;
   min-width: 0;
   gap: 3px;
+  flex-wrap: wrap;
 }
 
 .replacement-language-option {
@@ -257,13 +258,17 @@ button {
   background: rgba(0, 0, 0, 0.07);
 }
 
-.mini-action-button:hover {
-  background: rgba(0, 0, 0, 0.06);
+.mini-action-button:hover,
+.mini-action-button.is-pointer-active {
+  color: var(--macos-blue);
+  background: rgba(0, 122, 255, 0.1);
+  box-shadow: inset 0 0 0 1px rgba(0, 122, 255, 0.16);
 }
 
 .mini-action-button:active {
   transform: scale(0.92);
-  background: rgba(0, 0, 0, 0.08);
+  color: var(--macos-blue);
+  background: rgba(0, 122, 255, 0.14);
 }
 
 .mini-action-button:focus-visible {
@@ -275,14 +280,6 @@ button {
   font-size: 12px;
   font-weight: 600;
   letter-spacing: -0.01em;
-}
-
-.mini-action-button--replace:hover {
-  color: var(--macos-blue);
-}
-
-.mini-action-button--translate:hover {
-  color: var(--macos-blue);
 }
 
 .mini-action-button--more {
@@ -1416,6 +1413,11 @@ button {
   background: transparent;
 }
 
+.screenshot-overlay-window.is-pending,
+.screenshot-overlay-window.is-capturing {
+  cursor: default;
+}
+
 .screenshot-overlay-backdrop {
   position: absolute;
   inset: 0;
@@ -1473,5 +1475,96 @@ button {
   text-align: center;
   color: rgba(255, 255, 255, 0.86);
   background: rgba(255, 255, 255, 0.16);
+}
+
+.screenshot-confirm-controls {
+  position: absolute;
+  z-index: 3;
+  box-sizing: border-box;
+  width: 328px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas:
+    "target actions"
+    "custom custom";
+  gap: 8px 10px;
+  padding: 9px;
+  border: 1px solid rgba(255, 255, 255, 0.24);
+  border-radius: 16px;
+  color: rgba(255, 255, 255, 0.94);
+  background: rgba(15, 23, 42, 0.82);
+  box-shadow: 0 16px 42px rgba(15, 23, 42, 0.34);
+  backdrop-filter: blur(18px) saturate(160%);
+  -webkit-backdrop-filter: blur(18px) saturate(160%);
+}
+
+.screenshot-target-select {
+  grid-area: target;
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 7px;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.72);
+}
+
+.screenshot-target-select select,
+.screenshot-custom-target {
+  min-width: 0;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 10px;
+  padding: 6px 9px;
+  color: rgba(255, 255, 255, 0.94);
+  background: rgba(255, 255, 255, 0.12);
+  outline: none;
+}
+
+.screenshot-target-select select {
+  flex: 1;
+}
+
+.screenshot-target-select select option {
+  color: #111827;
+  background: #ffffff;
+}
+
+.screenshot-custom-target {
+  grid-area: custom;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.screenshot-confirm-actions {
+  grid-area: actions;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.screenshot-confirm-actions button {
+  appearance: none;
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 999px;
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1;
+  color: white;
+  transition: transform 150ms ease, background 150ms ease;
+}
+
+.screenshot-confirm-actions button:hover {
+  transform: translateY(-1px);
+}
+
+.screenshot-cancel-button {
+  background: rgba(255, 59, 48, 0.9);
+}
+
+.screenshot-confirm-button {
+  background: rgba(52, 199, 89, 0.92);
 }
 

@@ -15,7 +15,19 @@ export type AiProviderConfig = {
 };
 
 export type CloseButtonBehavior = 'ask' | 'minimizeToTray' | 'exitApp';
-export type ReplacementTargetLanguage = 'auto' | 'chinese' | 'english' | 'japanese' | 'korean' | 'custom';
+export type OutputTargetPreset =
+  | 'auto'
+  | 'chinese'
+  | 'english'
+  | 'japanese'
+  | 'korean'
+  | 'classicalChinese'
+  | 'oracleBone'
+  | 'pictograph'
+  | 'morseCode'
+  | 'custom';
+export type ReplacementTargetLanguage = OutputTargetPreset;
+export type TargetPresetKind = 'replacement' | 'translation';
 
 export type AppBehaviorConfig = {
   hotkey: string;
@@ -24,6 +36,8 @@ export type AppBehaviorConfig = {
   closeButtonBehavior: CloseButtonBehavior;
   replacementTargetLanguage: ReplacementTargetLanguage;
   replacementCustomTarget: string;
+  translationTargetLanguage: OutputTargetPreset;
+  translationCustomTarget: string;
 };
 
 export type AppConfig = {
@@ -43,6 +57,8 @@ export type AppConfig = {
   closeButtonBehavior: CloseButtonBehavior;
   replacementTargetLanguage: ReplacementTargetLanguage;
   replacementCustomTarget: string;
+  translationTargetLanguage: OutputTargetPreset;
+  translationCustomTarget: string;
   disabledApps: string[];
 };
 
@@ -217,8 +233,8 @@ export function hideFloatingButton(): Promise<void> {
   return invoke<void>('hide_floating_button');
 }
 
-export function showReplacementPresetPanel(): Promise<void> {
-  return invoke<void>('show_replacement_preset_panel');
+export function showReplacementPresetPanel(kind: TargetPresetKind = 'replacement'): Promise<void> {
+  return invoke<void>('show_replacement_preset_panel', { kind });
 }
 
 export function hideReplacementPresetPanel(): Promise<void> {
@@ -246,6 +262,7 @@ export function runScreenshotTranslate(request: {
   requestId: string;
   rect: Rect;
   viewportSize?: { width: number; height: number };
+  targetLanguage?: string;
 }): Promise<{ requestId: string }> {
   return invoke<{ requestId: string }>('run_screenshot_translate', { request });
 }

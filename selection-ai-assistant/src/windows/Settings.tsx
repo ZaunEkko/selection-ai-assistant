@@ -29,6 +29,8 @@ const defaultAppBehavior: AppBehaviorConfig = {
   closeButtonBehavior: 'ask',
   replacementTargetLanguage: 'auto',
   replacementCustomTarget: '',
+  translationTargetLanguage: 'auto',
+  translationCustomTarget: '',
 };
 
 function platformLabel(platform: PlatformCapabilities['platform']) {
@@ -109,6 +111,8 @@ export function Settings() {
           closeButtonBehavior: loadedConfig.closeButtonBehavior,
           replacementTargetLanguage: loadedConfig.replacementTargetLanguage,
           replacementCustomTarget: loadedConfig.replacementCustomTarget,
+          translationTargetLanguage: loadedConfig.translationTargetLanguage,
+          translationCustomTarget: loadedConfig.translationCustomTarget,
         });
       })
       .catch((err) => setError(formatCommandError(err)));
@@ -181,6 +185,8 @@ export function Settings() {
         closeButtonBehavior: next.closeButtonBehavior,
         replacementTargetLanguage: next.replacementTargetLanguage,
         replacementCustomTarget: next.replacementCustomTarget,
+        translationTargetLanguage: next.translationTargetLanguage,
+        translationCustomTarget: next.translationCustomTarget,
       });
       setBehaviorFeedback({ kind: 'status', message: '已保存启动、后台与截图快捷键设置。' });
     } catch (err) {
@@ -203,6 +209,8 @@ export function Settings() {
         closeButtonBehavior: next.closeButtonBehavior,
         replacementTargetLanguage: next.replacementTargetLanguage,
         replacementCustomTarget: next.replacementCustomTarget,
+        translationTargetLanguage: next.translationTargetLanguage,
+        translationCustomTarget: next.translationCustomTarget,
       });
     } catch (err) {
       setError(formatCommandError(err));

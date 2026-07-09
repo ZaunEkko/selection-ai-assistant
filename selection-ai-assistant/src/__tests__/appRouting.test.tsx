@@ -97,6 +97,8 @@ vi.mock('../api/tauri', () => ({
       closeButtonBehavior: 'ask',
       replacementTargetLanguage: 'korean',
       replacementCustomTarget: '',
+      translationTargetLanguage: 'morseCode',
+      translationCustomTarget: '',
       disabledApps: [],
     }),
   ),
@@ -191,6 +193,8 @@ describe('App routing by Tauri window label', () => {
       closeButtonBehavior: 'ask',
       replacementTargetLanguage: 'korean',
       replacementCustomTarget: '',
+      translationTargetLanguage: 'auto',
+      translationCustomTarget: '',
       disabledApps: [],
     });
     showTranslateResultMock.mockResolvedValue(undefined);
@@ -237,18 +241,130 @@ describe('App routing by Tauri window label', () => {
     expect(toolbar.querySelector('img')).toBeNull();
   });
 
-  it('opens the replacement preset panel when the replace button is hovered or receives focus', async () => {
+  it('opens and switches the target preset panel context from compact buttons', async () => {
+    vi.useFakeTimers();
     currentLabel = 'floating-button';
 
-    render(<App />);
-    const replaceButton = screen.getByRole('button', { name: '翻译并替换文本' });
-    fireEvent.mouseEnter(replaceButton);
+    try {
+      render(<App />);
+      const replaceButton = screen.getByRole('button', { name: '翻译并替换文本' });
+      fireEvent.mouseEnter(replaceButton);
 
-    await waitFor(() => expect(showReplacementPresetPanelMock).toHaveBeenCalledTimes(1));
+      expect(showReplacementPresetPanelMock).not.toHaveBeenCalled();
+      await act(async () => {
+        vi.advanceTimersByTime(150);
+      });
+      expect(showReplacementPresetPanelMock).toHaveBeenCalledWith('replacement');
 
-    fireEvent.focus(replaceButton);
+      showReplacementPresetPanelMock.mockClear();
+      const translateButton = screen.getByRole('button', { name: '翻译文本' });
+      fireEvent.mouseMove(translateButton);
 
-    await waitFor(() => expect(showReplacementPresetPanelMock).toHaveBeenCalledTimes(2));
+      expect(showReplacementPresetPanelMock).toHaveBeenCalledWith('translation');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('switches the target preset panel when pointer movement is delivered to the toolbar container', async () => {
+    vi.useFakeTimers();
+    currentLabel = 'floating-button';
+    let replaceRectSpy: ReturnType<typeof vi.spyOn> | undefined;
+    let translateRectSpy: ReturnType<typeof vi.spyOn> | undefined;
+    let moreRectSpy: ReturnType<typeof vi.spyOn> | undefined;
+
+    try {
+      render(<App />);
+      const toolbar = screen.getByRole('toolbar', { name: '文本操作' });
+      const replaceButton = screen.getByRole('button', { name: '翻译并替换文本' });
+      const translateButton = screen.getByRole('button', { name: '翻译文本' });
+      const moreButton = screen.getByRole('button', { name: '更多操作' });
+      replaceRectSpy = vi.spyOn(replaceButton, 'getBoundingClientRect').mockReturnValue({
+        left: 4,
+        right: 70,
+        top: 4,
+        bottom: 42,
+        width: 66,
+        height: 38,
+        x: 4,
+        y: 4,
+        toJSON: () => ({}),
+      } as DOMRect);
+      translateRectSpy = vi.spyOn(translateButton, 'getBoundingClientRect').mockReturnValue({
+        left: 70,
+        right: 136,
+        top: 4,
+        bottom: 42,
+        width: 66,
+        height: 38,
+        x: 70,
+        y: 4,
+        toJSON: () => ({}),
+      } as DOMRect);
+      moreRectSpy = vi.spyOn(moreButton, 'getBoundingClientRect').mockReturnValue({
+        left: 136,
+        right: 190,
+        top: 4,
+        bottom: 42,
+        width: 54,
+        height: 38,
+        x: 136,
+        y: 4,
+        toJSON: () => ({}),
+      } as DOMRect);
+
+      fireEvent.mouseMove(toolbar, { clientX: 30, clientY: 18 });
+      await act(async () => {
+        vi.advanceTimersByTime(150);
+      });
+      expect(showReplacementPresetPanelMock).toHaveBeenCalledWith('replacement');
+      expect(replaceButton).toHaveClass('is-pointer-active');
+
+      showReplacementPresetPanelMock.mockClear();
+      await act(async () => {
+        emit('floating_button_pointer_position', { x: 90, y: 18, width: window.innerWidth, height: window.innerHeight });
+      });
+
+      expect(showReplacementPresetPanelMock).toHaveBeenCalledWith('translation');
+      expect(translateButton).toHaveClass('is-pointer-active');
+
+      hideReplacementPresetPanelMock.mockClear();
+      await act(async () => {
+        emit('floating_button_pointer_position', { x: 150, y: 18, width: window.innerWidth, height: window.innerHeight });
+      });
+
+      expect(hideReplacementPresetPanelMock).toHaveBeenCalled();
+      expect(moreButton).toHaveClass('is-pointer-active');
+    } finally {
+      replaceRectSpy?.mockRestore();
+      translateRectSpy?.mockRestore();
+      moreRectSpy?.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it('closes the target preset panel before opening more actions', async () => {
+    vi.useFakeTimers();
+    currentLabel = 'floating-button';
+
+    try {
+      render(<App />);
+      fireEvent.mouseEnter(screen.getByRole('button', { name: '翻译并替换文本' }));
+      await act(async () => {
+        vi.advanceTimersByTime(150);
+      });
+      expect(showReplacementPresetPanelMock).toHaveBeenCalledWith('replacement');
+
+      const moreButton = screen.getByRole('button', { name: '更多操作' });
+      fireEvent.mouseMove(moreButton);
+      fireEvent.click(moreButton);
+      await act(async () => {});
+
+      expect(hideReplacementPresetPanelMock).toHaveBeenCalled();
+      expect(openPanelFromFloatingButtonMock).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('opens the full panel when more actions is clicked', async () => {
@@ -286,7 +402,12 @@ describe('App routing by Tauri window label', () => {
     await waitFor(() => expect(showTranslateResultMock).toHaveBeenLastCalledWith({ x: 320, y: 240 }, 'hello world', '你好世界', []));
     expect(hideReplacementPresetPanelMock).toHaveBeenCalledTimes(1);
     expect(runAiActionMock).toHaveBeenCalledWith(
-      expect.objectContaining({ action: 'translateOnly', text: 'hello world', requestId: expect.stringMatching(/^translate-/) }),
+      expect.objectContaining({
+        action: 'translateOnly',
+        text: 'hello world',
+        targetLanguage: '摩斯密码',
+        requestId: expect.stringMatching(/^translate-/),
+      }),
     );
   });
 
@@ -462,6 +583,83 @@ describe('App routing by Tauri window label', () => {
     expect(hideReplacementPresetPanelMock).not.toHaveBeenCalled();
   });
 
+  it('saves translation target from the shared target preset window without mutating replacement target', async () => {
+    currentLabel = 'replacement-preset';
+    saveAppBehaviorConfigMock.mockImplementation(async (preferences) => ({
+      defaultProviderId: null,
+      providers: [],
+      hoverRadius: 90,
+      hoverDelayMs: 220,
+      candidateTimeoutMs: 4000,
+      minDragDistance: 6,
+      launchAtStartup: false,
+      clipboardFallbackEnabled: true,
+      showClipboardPrivacyWarningOnFirstUse: true,
+      disableInElevatedWindows: true,
+      manualHotkeyAlwaysEnabled: true,
+      disabledApps: [],
+      ...preferences,
+    }));
+
+    render(<App />);
+    await waitFor(() => expect(listeners.has('target_preset_context')).toBe(true));
+    await act(async () => {
+      emit('target_preset_context', { kind: 'translation' });
+    });
+    fireEvent.click(await screen.findByRole('button', { name: '甲骨' }));
+
+    await waitFor(() =>
+      expect(saveAppBehaviorConfigMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          replacementTargetLanguage: 'korean',
+          replacementCustomTarget: '',
+          translationTargetLanguage: 'oracleBone',
+          translationCustomTarget: '',
+        }),
+      ),
+    );
+    expect(hideReplacementPresetPanelMock).not.toHaveBeenCalled();
+  });
+
+  it('saves custom translation target from the shared target preset window', async () => {
+    currentLabel = 'replacement-preset';
+    saveAppBehaviorConfigMock.mockImplementation(async (preferences) => ({
+      defaultProviderId: null,
+      providers: [],
+      hoverRadius: 90,
+      hoverDelayMs: 220,
+      candidateTimeoutMs: 4000,
+      minDragDistance: 6,
+      launchAtStartup: false,
+      clipboardFallbackEnabled: true,
+      showClipboardPrivacyWarningOnFirstUse: true,
+      disableInElevatedWindows: true,
+      manualHotkeyAlwaysEnabled: true,
+      disabledApps: [],
+      ...preferences,
+    }));
+
+    render(<App />);
+    await waitFor(() => expect(listeners.has('target_preset_context')).toBe(true));
+    await act(async () => {
+      emit('target_preset_context', { kind: 'translation' });
+    });
+    fireEvent.click(await screen.findByRole('button', { name: '自定' }));
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: '象形文字风格' } });
+    fireEvent.click(screen.getByRole('button', { name: '保存' }));
+
+    await waitFor(() =>
+      expect(saveAppBehaviorConfigMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          replacementTargetLanguage: 'korean',
+          replacementCustomTarget: '',
+          translationTargetLanguage: 'custom',
+          translationCustomTarget: '象形文字风格',
+        }),
+      ),
+    );
+  });
+
   it('does not replace selected text when the replace stream reports an error', async () => {
     currentLabel = 'floating-button';
     getLatestPanelContextMock.mockResolvedValue({
@@ -606,27 +804,38 @@ describe('App routing by Tauri window label', () => {
     expect(getLatestSourceTextContextMock).toHaveBeenCalledTimes(2);
   });
 
-  it('renders screenshot overlay and starts screenshot translation after dragging a region', async () => {
+  it('renders screenshot overlay and waits for confirmation before translating a dragged region', async () => {
     currentLabel = 'screenshot-overlay';
 
     render(<App />);
     const overlay = screen.getByRole('application', { name: '截图翻译取景层' });
 
-    fireEvent.mouseDown(overlay, { button: 0, clientX: 10, clientY: 20 });
-    fireEvent.mouseMove(overlay, { clientX: 80, clientY: 100 });
+    fireEvent.mouseDown(overlay, { button: 0, clientX: 120, clientY: 20 });
+    fireEvent.mouseMove(overlay, { clientX: 520, clientY: 100 });
     fireEvent.mouseUp(overlay);
+
+    expect(runScreenshotTranslateMock).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: '取消本次截图翻译' })).toBeInTheDocument();
+    expect(screen.getByLabelText('截图翻译目标').closest('.screenshot-confirm-controls')).toHaveStyle({
+      left: '192px',
+      top: '110px',
+    });
+    fireEvent.change(screen.getByLabelText('截图翻译目标'), { target: { value: 'morseCode' } });
+    fireEvent.click(screen.getByRole('button', { name: '确认本次截图翻译' }));
 
     await waitFor(() =>
       expect(runScreenshotTranslateMock).toHaveBeenCalledWith({
         requestId: expect.stringMatching(/^screenshot-/),
-        rect: { x: 10, y: 20, width: 70, height: 80 },
+        rect: { x: 120, y: 20, width: 400, height: 80 },
         viewportSize: { width: window.innerWidth, height: window.innerHeight },
+        targetLanguage: '摩斯密码',
       }),
     );
+    expect(cancelScreenshotTranslateMock).toHaveBeenCalledTimes(1);
     expect(screen.getByText('拖拽框选不可选中的文字区域')).toBeInTheDocument();
   });
 
-  it('resets screenshot overlay state so a second capture can drag a new region', async () => {
+  it('resets pending screenshot selection so a second capture can drag a new region', async () => {
     currentLabel = 'screenshot-overlay';
 
     render(<App />);
@@ -635,18 +844,37 @@ describe('App routing by Tauri window label', () => {
     fireEvent.mouseDown(overlay, { button: 0, clientX: 10, clientY: 20 });
     fireEvent.mouseMove(overlay, { clientX: 80, clientY: 100 });
     fireEvent.mouseUp(overlay);
-    await waitFor(() => expect(runScreenshotTranslateMock).toHaveBeenCalledTimes(1));
+    expect(runScreenshotTranslateMock).not.toHaveBeenCalled();
 
     fireEvent.mouseDown(overlay, { button: 0, clientX: 30, clientY: 40 });
     fireEvent.mouseMove(overlay, { clientX: 110, clientY: 160 });
     fireEvent.mouseUp(overlay);
+    fireEvent.click(screen.getByRole('button', { name: '确认本次截图翻译' }));
 
-    await waitFor(() => expect(runScreenshotTranslateMock).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(runScreenshotTranslateMock).toHaveBeenCalledTimes(1));
     expect(runScreenshotTranslateMock).toHaveBeenLastCalledWith({
       requestId: expect.stringMatching(/^screenshot-/),
       rect: { x: 30, y: 40, width: 80, height: 120 },
       viewportSize: { width: window.innerWidth, height: window.innerHeight },
     });
+  });
+
+  it('cancels pending screenshot selection from the confirmation controls', async () => {
+    currentLabel = 'screenshot-overlay';
+
+    render(<App />);
+    const overlay = screen.getByRole('application', { name: '截图翻译取景层' });
+
+    fireEvent.mouseDown(overlay, { button: 0, clientX: 10, clientY: 20 });
+    fireEvent.mouseMove(overlay, { clientX: 80, clientY: 100 });
+    fireEvent.mouseUp(overlay);
+    fireEvent.pointerDown(screen.getByRole('button', { name: '取消本次截图翻译' }));
+    fireEvent.mouseDown(screen.getByRole('button', { name: '取消本次截图翻译' }), { button: 0, clientX: 70, clientY: 110 });
+    fireEvent.click(screen.getByRole('button', { name: '取消本次截图翻译' }));
+
+    await waitFor(() => expect(cancelScreenshotTranslateMock).toHaveBeenCalledTimes(1));
+    expect(screen.queryByRole('button', { name: '取消本次截图翻译' })).not.toBeInTheDocument();
+    expect(runScreenshotTranslateMock).not.toHaveBeenCalled();
   });
 
   it('cancels screenshot overlay when Escape is pressed', async () => {

@@ -9,7 +9,7 @@ use std::{
 };
 
 use base64::Engine;
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 use windows_sys::Win32::{
     Foundation::{CloseHandle, GlobalFree, BOOL, LPARAM, LRESULT, POINT, RECT as WinRect, WPARAM},
     Graphics::Gdi::{
@@ -77,7 +77,9 @@ use crate::{
             ClipboardRestoreStatus,
         },
         types::SelectionCandidate,
-        uia_reader::read_current_uia_selection_from_hwnd,
+        uia_reader::{
+            read_current_uia_selection_from_hwnd, read_current_uia_selection_from_hwnd_with_points,
+        },
     },
     types::{AppWindowInfo, Point, Rect},
 };
@@ -226,6 +228,40 @@ fn elapsed_ms(started_at: Instant) -> u64 {
         .unwrap_or(u64::MAX)
 }
 
+fn emit_floating_button_pointer_position(app: &tauri::AppHandle, position: Point) {
+    let Some(window) = app.get_webview_window("floating-button") else {
+        return;
+    };
+    if !window.is_visible().unwrap_or(false) {
+        return;
+    }
+    let Ok(window_position) = window.outer_position() else {
+        return;
+    };
+    let Ok(window_size) = window.outer_size() else {
+        return;
+    };
+    let rect = Rect {
+        x: window_position.x as f64,
+        y: window_position.y as f64,
+        width: window_size.width as f64,
+        height: window_size.height as f64,
+    };
+    if !crate::input_monitor::events::rect_contains(rect, position) {
+        return;
+    }
+
+    let _ = window.emit(
+        "floating_button_pointer_position",
+        serde_json::json!({
+            "x": position.x - rect.x,
+            "y": position.y - rect.y,
+            "width": rect.width,
+            "height": rect.height,
+        }),
+    );
+}
+
 fn handle_mouse_event(
     app: &tauri::AppHandle,
     drag_start: &mut Option<Point>,
@@ -246,6 +282,7 @@ fn handle_mouse_event(
     }
 
     if let MouseButtonEvent::Move(position) = event {
+        emit_floating_button_pointer_position(app, position);
         let config = current_config(app).unwrap_or_default();
         match hover_action_for_pending_selection_when_idle(
             pending_selection,
@@ -369,6 +406,21 @@ fn drag_selection_hint_rects(down_point: Point, up_point: Point) -> Vec<Rect> {
         width,
         height: HINT_LINE_HEIGHT,
     }]
+}
+
+fn uia_probe_points_for_drag((down_point, up_point): (Point, Point)) -> Vec<Point> {
+    let point_at = |ratio: f64| Point {
+        x: down_point.x + (up_point.x - down_point.x) * ratio,
+        y: down_point.y + (up_point.y - down_point.y) * ratio,
+    };
+
+    vec![
+        down_point,
+        up_point,
+        point_at(0.25),
+        point_at(0.5),
+        point_at(0.75),
+    ]
 }
 
 fn should_use_selection_hint_rects(hint_rects: &[Rect]) -> bool {
@@ -1130,6 +1182,7 @@ fn assistant_window_rects(app: &tauri::AppHandle) -> Vec<Rect> {
         "ai-panel",
         "source-text",
         "translate-result",
+        "screenshot-overlay",
     ]
     .into_iter()
     .filter_map(|label| app.get_webview_window(label))
@@ -1176,7 +1229,18 @@ fn read_current_selection_context(
     let visual_selection = options.drag_points.and_then(|(down_point, up_point)| {
         visual_selection_from_drag(source_window_handle, down_point, up_point)
     });
-    let uia_result = read_current_uia_selection_from_hwnd(source_window_handle as *mut c_void);
+    let uia_points = options
+        .drag_points
+        .map(uia_probe_points_for_drag)
+        .unwrap_or_default();
+    let uia_result = if uia_points.is_empty() {
+        read_current_uia_selection_from_hwnd(source_window_handle as *mut c_void)
+    } else {
+        read_current_uia_selection_from_hwnd_with_points(
+            source_window_handle as *mut c_void,
+            &uia_points,
+        )
+    };
     if let Some(selection) = uia_result
         .clone()
         .filter(|result| result.is_usable())
