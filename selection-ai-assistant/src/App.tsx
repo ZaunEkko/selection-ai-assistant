@@ -4,6 +4,7 @@ import { MiniActionBar } from './windows/MiniActionBar';
 import { ReplacementPresetPanel } from './windows/ReplacementPresetPanel';
 import { Settings } from './windows/Settings';
 import { SourceTextWindow } from './windows/SourceTextWindow';
+import { ScreenshotOverlay } from './windows/ScreenshotOverlay';
 import { TranslateResult } from './windows/TranslateResult';
 
 export default function App() {
@@ -27,6 +28,10 @@ export default function App() {
 
   if (label === 'translate-result') {
     return <TranslateResult />;
+  }
+
+  if (label === 'screenshot-overlay') {
+    return <ScreenshotOverlay />;
   }
 
   return <Settings />;

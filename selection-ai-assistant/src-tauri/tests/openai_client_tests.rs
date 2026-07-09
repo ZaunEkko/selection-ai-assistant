@@ -1,6 +1,6 @@
 use selection_ai_assistant_lib::ai::openai_compatible::{
-    build_chat_request, extract_delta_content, extract_sse_deltas_from_bytes, AiClientError,
-    ChatMessage, OpenAiCompatibleClient,
+    build_chat_request, build_vision_chat_request, extract_delta_content,
+    extract_sse_deltas_from_bytes, AiClientError, ChatMessage, OpenAiCompatibleClient,
 };
 use selection_ai_assistant_lib::config::{AiProviderConfig, AiProviderKind};
 
@@ -20,6 +20,34 @@ fn builds_openai_compatible_chat_request() {
     assert_eq!(request.messages.len(), 2);
     assert_eq!(request.messages[0].role, "system");
     assert_eq!(request.messages[1].role, "user");
+}
+
+#[test]
+fn builds_openai_compatible_vision_chat_request() {
+    let request = build_vision_chat_request(
+        "vision-test",
+        "你是截图翻译助手",
+        "翻译截图中的文字",
+        "data:image/png;base64,abc123",
+        true,
+    );
+    let value = serde_json::to_value(request).expect("vision request should serialize");
+
+    assert_eq!(value["model"], "vision-test");
+    assert_eq!(value["stream"], true);
+    assert_eq!(value["messages"][0]["role"], "system");
+    assert_eq!(value["messages"][0]["content"], "你是截图翻译助手");
+    assert_eq!(value["messages"][1]["role"], "user");
+    assert_eq!(value["messages"][1]["content"][0]["type"], "text");
+    assert_eq!(
+        value["messages"][1]["content"][0]["text"],
+        "翻译截图中的文字"
+    );
+    assert_eq!(value["messages"][1]["content"][1]["type"], "image_url");
+    assert_eq!(
+        value["messages"][1]["content"][1]["image_url"]["url"],
+        "data:image/png;base64,abc123"
+    );
 }
 
 #[test]
