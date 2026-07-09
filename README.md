@@ -355,4 +355,4 @@ cargo test
 
 ## License
 
-当前尚未添加许可证文件。正式公开分发前需要补充 `LICENSE`。
+本项目基于 [MIT License](LICENSE) 开源。
