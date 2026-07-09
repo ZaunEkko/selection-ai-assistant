@@ -232,8 +232,11 @@ export function Settings() {
           <h2>模型服务配置</h2>
           <ProviderForm initialProvider={selectedProvider} onSave={handleSave} />
 
-          <section className="settings-section settings-section--embedded">
-            <h2>启动、后台与截图快捷键</h2>
+          <section className="settings-section settings-section--embedded settings-section--behavior">
+            <div className="settings-section-heading">
+              <h2>启动、后台与截图快捷键</h2>
+              <p>控制应用驻留方式、截图翻译入口和关闭窗口时的后台行为。</p>
+            </div>
             <form className="app-behavior-form" onSubmit={handleSaveAppBehavior} aria-busy={behaviorSaving}>
               <label>
                 截图翻译快捷键

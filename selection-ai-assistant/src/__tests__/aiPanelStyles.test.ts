@@ -21,17 +21,19 @@ describe('Settings window layout styles', () => {
     expect(settingsWindow).toMatch(/overflow-y:\s*auto/);
   });
 
-  it('uses a structured macOS-style settings layout instead of plain stacked boxes', () => {
+  it('uses a structured paper-glass settings layout instead of plain stacked boxes', () => {
     const settingsHero = blockFor('.settings-hero');
     const settingsGrid = blockFor('.settings-grid');
     const providerForm = blockFor('.provider-form');
     const settingsSection = blockFor('.settings-section');
+    const behaviorSection = blockFor('.settings-section--behavior');
 
     expect(settingsHero).toMatch(/background:\s*var\(--macos-bg\)/);
     expect(settingsHero).toMatch(/border-bottom:\s*1px\s+solid\s+var\(--macos-separator\)/);
     expect(settingsGrid).toMatch(/grid-template-columns:\s*minmax\(0,\s*1\.5fr\)\s+minmax\(280px,\s*0\.5fr\)/);
     expect(providerForm).toMatch(/display:\s*grid/);
-    expect(settingsSection).toMatch(/border-radius:\s*10px/);
+    expect(settingsSection).toMatch(/border-radius:\s*18px/);
+    expect(behaviorSection).toMatch(/background:\s*rgba\(250,\s*248,\s*241,\s*0\.58\)/);
   });
 });
 
@@ -84,7 +86,7 @@ describe('AI panel scroll layout styles', () => {
     expect(expandedSelectedText).toMatch(/max-height:\s*min\(32vh,\s*220px\)/);
     expect(expandedSelectedText).toMatch(/overflow-y:\s*auto/);
     expect(selectedTextActions).toMatch(/justify-content:\s*space-between/);
-    expect(expandButton).toMatch(/border-radius:\s*6px/);
+    expect(expandButton).toMatch(/border-radius:\s*999px/);
   });
 
   it('makes action switch buttons look like a distinct segmented tool group', () => {
@@ -95,7 +97,7 @@ describe('AI panel scroll layout styles', () => {
     expect(actionBar).toMatch(/background:\s*var\(--macos-bg\)/);
     expect(actionBar).toMatch(/box-shadow:\s*var\(--macos-shadow-sm\)/);
     expect(actionSwitchButton).toMatch(/border:\s*0/);
-    expect(actionSwitchButton).toMatch(/border-radius:\s*6px/);
+    expect(actionSwitchButton).toMatch(/border-radius:\s*12px/);
     expect(activeActionSwitchButton).toMatch(/color:\s*white/);
     expect(activeActionSwitchButton).toMatch(/background:\s*var\(--macos-blue\)/);
   });
@@ -107,14 +109,14 @@ describe('AI panel scroll layout styles', () => {
 
     expect(buttonRow).toMatch(/justify-content:\s*flex-end/);
     expect(executeButton).toMatch(/display:\s*inline-flex/);
-    expect(executeButton).toMatch(/border:\s*1px\s+solid\s+rgba\(0,\s*122,\s*255,\s*0\.24\)/);
+    expect(executeButton).toMatch(/border:\s*1px\s+solid\s+rgba\(47,\s*111,\s*95,\s*0\.24\)/);
     expect(executeButton).toMatch(/font-weight:\s*500/);
     expect(executeButton).toMatch(/color:\s*var\(--macos-blue\)/);
-    expect(executeButton).toMatch(/background:\s*linear-gradient\(180deg,\s*rgba\(255,\s*255,\s*255,\s*0\.96\),\s*rgba\(245,\s*250,\s*255,\s*0\.96\)\)/);
+    expect(executeButton).toMatch(/background:\s*rgba\(255,\s*253,\s*247,\s*0\.94\)/);
     expect(executeButton).not.toMatch(/font-weight:\s*700/);
     expect(executeButton).not.toMatch(/box-shadow/);
-    expect(executeButtonHover).toMatch(/background:\s*rgba\(0,\s*122,\s*255,\s*0\.08\)/);
-    expect(executeButtonHover).not.toMatch(/transform/);
+    expect(executeButtonHover).toMatch(/background:\s*rgba\(47,\s*111,\s*95,\s*0\.08\)/);
+    expect(executeButtonHover).toMatch(/transform:\s*translateY\(-1px\)/);
     expect(executeButtonHover).not.toMatch(/box-shadow/);
   });
 

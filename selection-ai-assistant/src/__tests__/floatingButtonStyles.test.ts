@@ -37,7 +37,7 @@ describe('floating button styles', () => {
     expect(css).toMatch(/\.mini-action-bar[\s\S]*min-width:\s*228px/);
     expect(css).toMatch(/\.mini-action-bar[\s\S]*min-height:\s*34px/);
     expect(css).toMatch(/\.mini-action-button[\s\S]*padding:\s*6px\s+11px/);
-    expect(css).toMatch(/\.mini-action-button\.is-pointer-active[\s\S]*background:\s*rgba\(0,\s*122,\s*255,\s*0\.1\)/);
+    expect(css).toMatch(/\.mini-action-button\.is-pointer-active[\s\S]*background:\s*rgba\(47,\s*111,\s*95,\s*0\.1\)/);
     expect(panelRs).toMatch(
       /const\s+FLOATING_BUTTON_SIZE:\s*WindowSize\s*=\s*WindowSize\s*\{[\s\S]*width:\s*244\.0,[\s\S]*height:\s*44\.0,[\s\S]*\}/,
     );
