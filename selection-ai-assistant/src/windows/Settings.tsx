@@ -24,6 +24,7 @@ type Feedback = {
 
 const defaultAppBehavior: AppBehaviorConfig = {
   hotkey: 'Ctrl+Alt+A',
+  launchAtStartup: false,
   startMinimizedToTray: false,
   closeButtonBehavior: 'ask',
   replacementTargetLanguage: 'auto',
@@ -103,6 +104,7 @@ export function Settings() {
         setConfig(loadedConfig);
         setAppBehavior({
           hotkey: loadedConfig.hotkey,
+          launchAtStartup: loadedConfig.launchAtStartup,
           startMinimizedToTray: loadedConfig.startMinimizedToTray,
           closeButtonBehavior: loadedConfig.closeButtonBehavior,
           replacementTargetLanguage: loadedConfig.replacementTargetLanguage,
@@ -167,21 +169,22 @@ export function Settings() {
   async function handleSaveAppBehavior(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setBehaviorSaving(true);
-    setBehaviorFeedback({ kind: 'status', message: '正在保存启动、关闭与快捷键设置…' });
+    setBehaviorFeedback({ kind: 'status', message: '正在保存启动、后台与截图快捷键设置…' });
 
     try {
       const next = await saveAppBehaviorConfig(appBehavior);
       setConfig(next);
       setAppBehavior({
         hotkey: next.hotkey,
+        launchAtStartup: next.launchAtStartup,
         startMinimizedToTray: next.startMinimizedToTray,
         closeButtonBehavior: next.closeButtonBehavior,
         replacementTargetLanguage: next.replacementTargetLanguage,
         replacementCustomTarget: next.replacementCustomTarget,
       });
-      setBehaviorFeedback({ kind: 'status', message: '已保存启动、关闭与快捷键设置。' });
+      setBehaviorFeedback({ kind: 'status', message: '已保存启动、后台与截图快捷键设置。' });
     } catch (err) {
-      setBehaviorFeedback({ kind: 'error', message: `保存启动、关闭与快捷键设置失败：${formatCommandError(err)}` });
+      setBehaviorFeedback({ kind: 'error', message: `保存启动、后台与截图快捷键设置失败：${formatCommandError(err)}` });
     } finally {
       setBehaviorSaving(false);
     }
@@ -195,6 +198,7 @@ export function Settings() {
       setConfig(next);
       setAppBehavior({
         hotkey: next.hotkey,
+        launchAtStartup: next.launchAtStartup,
         startMinimizedToTray: next.startMinimizedToTray,
         closeButtonBehavior: next.closeButtonBehavior,
         replacementTargetLanguage: next.replacementTargetLanguage,
@@ -221,10 +225,10 @@ export function Settings() {
           <ProviderForm initialProvider={selectedProvider} onSave={handleSave} />
 
           <section className="settings-section settings-section--embedded">
-            <h2>启动、关闭与快捷键</h2>
+            <h2>启动、后台与截图快捷键</h2>
             <form className="app-behavior-form" onSubmit={handleSaveAppBehavior} aria-busy={behaviorSaving}>
               <label>
-                手动快捷键
+                截图翻译快捷键
                 <input
                   type="text"
                   value={appBehavior.hotkey}
@@ -233,7 +237,19 @@ export function Settings() {
                   onChange={(event) => setAppBehavior({ ...appBehavior, hotkey: event.target.value })}
                 />
               </label>
-              <p className="field-help">当前支持 Ctrl+Alt+单个字母，例如 Ctrl+Alt+A 或 Ctrl+Alt+T。</p>
+              <p className="field-help">当前支持 Ctrl+Alt+单个字母。按下后拖拽选择截图区域，用于识别并翻译不可选中的文字。</p>
+
+              <div className="checkbox-field">
+                <input
+                  id="launch-at-startup"
+                  type="checkbox"
+                  checked={appBehavior.launchAtStartup}
+                  disabled={behaviorSaving}
+                  onChange={(event) => setAppBehavior({ ...appBehavior, launchAtStartup: event.target.checked })}
+                />
+                <label htmlFor="launch-at-startup">开机自启</label>
+              </div>
+              <p className="field-help">开启后 Windows 登录时自动启动划词助手。</p>
 
               <div className="checkbox-field">
                 <input
@@ -247,7 +263,7 @@ export function Settings() {
                 />
                 <label htmlFor="start-minimized-to-tray">启动时最小化到后台</label>
               </div>
-              <p className="field-help">开启后启动应用时不显示设置窗口，只保留托盘后台运行。</p>
+              <p className="field-help">开启后启动应用时不显示设置窗口，只保留托盘后台运行；配合开机自启可实现登录后静默驻留。</p>
 
               <label>
                 关闭按钮行为
@@ -265,7 +281,7 @@ export function Settings() {
               </label>
 
               <button type="submit" disabled={behaviorSaving}>
-                {behaviorSaving ? '正在保存设置…' : '保存启动、关闭与快捷键设置'}
+                {behaviorSaving ? '正在保存设置…' : '保存启动、后台与截图快捷键设置'}
               </button>
               {behaviorFeedback?.kind === 'status' && <p role="status">{behaviorFeedback.message}</p>}
               {behaviorFeedback?.kind === 'error' && <p role="alert">{behaviorFeedback.message}</p>}
@@ -335,7 +351,7 @@ export function Settings() {
             aria-labelledby="close-confirm-title"
           >
             <h2 id="close-confirm-title">关闭 Selection AI Assistant？</h2>
-            <p>可以最小化到后台继续响应划词，也可以直接退出应用。本次选择会写入设置，之后可在“启动、关闭与快捷键”中修改。</p>
+            <p>可以最小化到后台继续响应划词，也可以直接退出应用。本次选择会写入设置，之后可在“启动、后台与截图快捷键”中修改。</p>
             <div className="close-confirm-actions">
               <button type="button" onClick={() => void handleClosePromptChoice('minimizeToTray')}>
                 最小化到后台并记住

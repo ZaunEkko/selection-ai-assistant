@@ -83,6 +83,7 @@ impl Default for ReplacementTargetLanguage {
 #[serde(default, rename_all = "camelCase")]
 pub struct AppBehaviorConfig {
     pub hotkey: String,
+    pub launch_at_startup: bool,
     pub start_minimized_to_tray: bool,
     pub close_button_behavior: CloseButtonBehavior,
     pub replacement_target_language: ReplacementTargetLanguage,
@@ -94,6 +95,7 @@ impl Default for AppBehaviorConfig {
         let config = AppConfig::default();
         Self {
             hotkey: config.hotkey,
+            launch_at_startup: config.launch_at_startup,
             start_minimized_to_tray: config.start_minimized_to_tray,
             close_button_behavior: config.close_button_behavior,
             replacement_target_language: config.replacement_target_language,
@@ -112,6 +114,7 @@ pub struct AppConfig {
     pub candidate_timeout_ms: u64,
     pub min_drag_distance: f64,
     pub hotkey: String,
+    pub launch_at_startup: bool,
     pub clipboard_fallback_enabled: bool,
     pub show_clipboard_privacy_warning_on_first_use: bool,
     pub disable_in_elevated_windows: bool,
@@ -133,6 +136,7 @@ impl Default for AppConfig {
             candidate_timeout_ms: 4_000,
             min_drag_distance: 6.0,
             hotkey: "Ctrl+Alt+A".to_string(),
+            launch_at_startup: false,
             clipboard_fallback_enabled: true,
             show_clipboard_privacy_warning_on_first_use: true,
             disable_in_elevated_windows: true,

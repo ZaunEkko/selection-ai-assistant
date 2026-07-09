@@ -3,6 +3,10 @@ use serde::{Deserialize, Serialize};
 use crate::types::{Point, Rect};
 
 const ESTIMATED_TEXT_TOP_OFFSET: f64 = 12.0;
+const DRAG_SELECTION_MATCH_PADDING_X: f64 = 96.0;
+const DRAG_SELECTION_MATCH_PADDING_Y: f64 = 72.0;
+const CONTROL_RECT_MIN_WIDTH: f64 = 240.0;
+const CONTROL_RECT_MIN_HEIGHT: f64 = 48.0;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -18,6 +22,57 @@ pub fn is_drag_distance_met(down: Point, up: Point, min_drag_distance: f64) -> b
     let dx = up.x - down.x;
     let dy = up.y - down.y;
     ((dx * dx) + (dy * dy)).sqrt() >= min_drag_distance
+}
+
+pub fn selection_geometry_matches_drag_gesture(
+    rects: &[Rect],
+    down: Point,
+    up: Point,
+    has_visual_selection: bool,
+) -> bool {
+    has_visual_selection || selection_rects_match_drag_gesture(rects, down, up)
+}
+
+pub fn selection_rects_match_drag_gesture(rects: &[Rect], down: Point, up: Point) -> bool {
+    let drag_bounds = drag_match_bounds(down, up);
+
+    rects
+        .iter()
+        .copied()
+        .filter(is_valid_selection_rect)
+        .any(|rect| {
+            !looks_like_control_bounds_for_drag(rect, down, up)
+                && rects_intersect(rect, drag_bounds)
+        })
+}
+
+fn drag_match_bounds(down: Point, up: Point) -> Rect {
+    let left = down.x.min(up.x) - DRAG_SELECTION_MATCH_PADDING_X;
+    let top = down.y.min(up.y) - DRAG_SELECTION_MATCH_PADDING_Y;
+    let right = down.x.max(up.x) + DRAG_SELECTION_MATCH_PADDING_X;
+    let bottom = down.y.max(up.y) + DRAG_SELECTION_MATCH_PADDING_Y;
+
+    Rect {
+        x: left,
+        y: top,
+        width: (right - left).max(1.0),
+        height: (bottom - top).max(1.0),
+    }
+}
+
+fn looks_like_control_bounds_for_drag(rect: Rect, down: Point, up: Point) -> bool {
+    rect.width >= CONTROL_RECT_MIN_WIDTH
+        && rect.height >= CONTROL_RECT_MIN_HEIGHT
+        && rect_contains(rect, down)
+        && rect_contains(rect, up)
+}
+
+fn rects_intersect(a: Rect, b: Rect) -> bool {
+    a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + b.height && a.y + a.height > b.y
+}
+
+fn is_valid_selection_rect(rect: &Rect) -> bool {
+    rect.width > 0.0 && rect.height > 0.0
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Default)]

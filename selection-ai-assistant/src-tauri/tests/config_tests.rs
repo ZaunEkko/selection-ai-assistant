@@ -28,7 +28,7 @@ fn overlay_windows_have_tauri_capability_permissions() {
         .as_array()
         .expect("capability windows should be an array");
 
-    for label in ["source-text", "translate-result"] {
+    for label in ["source-text", "translate-result", "screenshot-overlay"] {
         assert!(
             windows.iter().any(|window| window.as_str() == Some(label)),
             "{label} window needs capability access to listen for events and invoke window commands"
@@ -85,6 +85,7 @@ fn default_config_contains_privacy_defaults() {
     assert!(config.show_clipboard_privacy_warning_on_first_use);
     assert!(config.disable_in_elevated_windows);
     assert!(config.manual_hotkey_always_enabled);
+    assert!(!config.launch_at_startup);
     assert!(!config.start_minimized_to_tray);
     assert_eq!(config.close_button_behavior, CloseButtonBehavior::Ask);
     assert_eq!(
@@ -123,6 +124,7 @@ fn settings_schema_defaults_missing_fields_for_backward_compatibility() {
     assert_eq!(config.hotkey, AppConfig::default().hotkey);
     assert!(config.clipboard_fallback_enabled);
     assert!(config.manual_hotkey_always_enabled);
+    assert!(!config.launch_at_startup);
     assert!(!config.start_minimized_to_tray);
     assert_eq!(config.close_button_behavior, CloseButtonBehavior::Ask);
     assert_eq!(

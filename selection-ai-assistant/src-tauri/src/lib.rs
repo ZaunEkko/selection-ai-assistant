@@ -16,6 +16,10 @@ use app_state::AppState;
 pub fn run() {
     tauri::Builder::default()
         .manage(AppState::load_or_default())
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            None,
+        ))
         .invoke_handler(tauri::generate_handler![
             commands::config::get_config,
             commands::config::save_app_behavior_config,
@@ -34,6 +38,9 @@ pub fn run() {
             commands::panel::hide_source_text_window,
             commands::panel::show_translate_result,
             commands::panel::hide_translate_result,
+            commands::screenshot::show_screenshot_overlay,
+            commands::screenshot::cancel_screenshot_translate,
+            commands::screenshot::run_screenshot_translate,
             commands::platform::get_platform_capabilities,
             commands::selection::open_panel_for_text,
             commands::selection::get_latest_panel_context,
