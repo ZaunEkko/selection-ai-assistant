@@ -19,6 +19,7 @@ export type ReplacementTargetLanguage = 'auto' | 'chinese' | 'english' | 'japane
 
 export type AppBehaviorConfig = {
   hotkey: string;
+  launchAtStartup: boolean;
   startMinimizedToTray: boolean;
   closeButtonBehavior: CloseButtonBehavior;
   replacementTargetLanguage: ReplacementTargetLanguage;
@@ -33,6 +34,7 @@ export type AppConfig = {
   candidateTimeoutMs: number;
   minDragDistance: number;
   hotkey: string;
+  launchAtStartup: boolean;
   clipboardFallbackEnabled: boolean;
   showClipboardPrivacyWarningOnFirstUse: boolean;
   disableInElevatedWindows: boolean;
@@ -230,6 +232,22 @@ export function showTranslateResult(
   selectionRects: Rect[] = [],
 ): Promise<void> {
   return invoke<void>('show_translate_result', { position, originalText, translatedText, selectionRects });
+}
+
+export function showScreenshotOverlay(position: Point): Promise<void> {
+  return invoke<void>('show_screenshot_overlay', { position });
+}
+
+export function cancelScreenshotTranslate(): Promise<void> {
+  return invoke<void>('cancel_screenshot_translate');
+}
+
+export function runScreenshotTranslate(request: {
+  requestId: string;
+  rect: Rect;
+  viewportSize?: { width: number; height: number };
+}): Promise<{ requestId: string }> {
+  return invoke<{ requestId: string }>('run_screenshot_translate', { request });
 }
 
 export function hideTranslateResult(): Promise<void> {

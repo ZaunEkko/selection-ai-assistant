@@ -18,6 +18,8 @@ const {
   hideFloatingButtonMock,
   replaceSelectedTextMock,
   hideSourceTextWindowMock,
+  cancelScreenshotTranslateMock,
+  runScreenshotTranslateMock,
   getLatestPanelContextMock,
   getLatestSourceTextContextMock,
   currentWindowHideMock,
@@ -36,6 +38,8 @@ const {
   hideFloatingButtonMock: vi.fn(),
   replaceSelectedTextMock: vi.fn(),
   hideSourceTextWindowMock: vi.fn(),
+  cancelScreenshotTranslateMock: vi.fn(),
+  runScreenshotTranslateMock: vi.fn(),
   getLatestPanelContextMock: vi.fn(),
   getLatestSourceTextContextMock: vi.fn(),
   currentWindowHideMock: vi.fn(),
@@ -84,6 +88,7 @@ vi.mock('../api/tauri', () => ({
       candidateTimeoutMs: 4000,
       minDragDistance: 6,
       hotkey: 'Ctrl+Alt+A',
+      launchAtStartup: false,
       clipboardFallbackEnabled: true,
       showClipboardPrivacyWarningOnFirstUse: true,
       disableInElevatedWindows: true,
@@ -112,6 +117,9 @@ vi.mock('../api/tauri', () => ({
   ),
   hideAiPanel: vi.fn(),
   hideSourceTextWindow: hideSourceTextWindowMock,
+  cancelScreenshotTranslate: cancelScreenshotTranslateMock,
+  runScreenshotTranslate: runScreenshotTranslateMock,
+  showScreenshotOverlay: vi.fn(),
   showSourceTextWindow: vi.fn(),
   startDragAiPanel: vi.fn(),
   startDragSourceTextWindow: vi.fn(),
@@ -156,6 +164,8 @@ describe('App routing by Tauri window label', () => {
     hideFloatingButtonMock.mockReset();
     replaceSelectedTextMock.mockReset();
     openPanelFromFloatingButtonMock.mockReset();
+    cancelScreenshotTranslateMock.mockReset();
+    runScreenshotTranslateMock.mockReset();
     hideSourceTextWindowMock.mockReset();
     hideTranslateResultMock.mockReset();
     getLatestPanelContextMock.mockReset();
@@ -172,6 +182,7 @@ describe('App routing by Tauri window label', () => {
       candidateTimeoutMs: 4000,
       minDragDistance: 6,
       hotkey: 'Ctrl+Alt+A',
+      launchAtStartup: false,
       clipboardFallbackEnabled: true,
       showClipboardPrivacyWarningOnFirstUse: true,
       disableInElevatedWindows: true,
@@ -189,6 +200,8 @@ describe('App routing by Tauri window label', () => {
     hideFloatingButtonMock.mockResolvedValue(undefined);
     replaceSelectedTextMock.mockResolvedValue(undefined);
     openPanelFromFloatingButtonMock.mockResolvedValue(undefined);
+    cancelScreenshotTranslateMock.mockResolvedValue(undefined);
+    runScreenshotTranslateMock.mockResolvedValue({ requestId: 'screenshot-request' });
     hideSourceTextWindowMock.mockResolvedValue(undefined);
     getLatestPanelContextMock.mockResolvedValue(null);
     getLatestSourceTextContextMock.mockResolvedValue(null);
@@ -429,6 +442,7 @@ describe('App routing by Tauri window label', () => {
       hoverDelayMs: 220,
       candidateTimeoutMs: 4000,
       minDragDistance: 6,
+      launchAtStartup: false,
       clipboardFallbackEnabled: true,
       showClipboardPrivacyWarningOnFirstUse: true,
       disableInElevatedWindows: true,
@@ -590,6 +604,58 @@ describe('App routing by Tauri window label', () => {
 
     expect(await screen.findByText('focused recovered source text')).toBeInTheDocument();
     expect(getLatestSourceTextContextMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('renders screenshot overlay and starts screenshot translation after dragging a region', async () => {
+    currentLabel = 'screenshot-overlay';
+
+    render(<App />);
+    const overlay = screen.getByRole('application', { name: '截图翻译取景层' });
+
+    fireEvent.mouseDown(overlay, { button: 0, clientX: 10, clientY: 20 });
+    fireEvent.mouseMove(overlay, { clientX: 80, clientY: 100 });
+    fireEvent.mouseUp(overlay);
+
+    await waitFor(() =>
+      expect(runScreenshotTranslateMock).toHaveBeenCalledWith({
+        requestId: expect.stringMatching(/^screenshot-/),
+        rect: { x: 10, y: 20, width: 70, height: 80 },
+        viewportSize: { width: window.innerWidth, height: window.innerHeight },
+      }),
+    );
+    expect(screen.getByText('拖拽框选不可选中的文字区域')).toBeInTheDocument();
+  });
+
+  it('resets screenshot overlay state so a second capture can drag a new region', async () => {
+    currentLabel = 'screenshot-overlay';
+
+    render(<App />);
+    const overlay = screen.getByRole('application', { name: '截图翻译取景层' });
+
+    fireEvent.mouseDown(overlay, { button: 0, clientX: 10, clientY: 20 });
+    fireEvent.mouseMove(overlay, { clientX: 80, clientY: 100 });
+    fireEvent.mouseUp(overlay);
+    await waitFor(() => expect(runScreenshotTranslateMock).toHaveBeenCalledTimes(1));
+
+    fireEvent.mouseDown(overlay, { button: 0, clientX: 30, clientY: 40 });
+    fireEvent.mouseMove(overlay, { clientX: 110, clientY: 160 });
+    fireEvent.mouseUp(overlay);
+
+    await waitFor(() => expect(runScreenshotTranslateMock).toHaveBeenCalledTimes(2));
+    expect(runScreenshotTranslateMock).toHaveBeenLastCalledWith({
+      requestId: expect.stringMatching(/^screenshot-/),
+      rect: { x: 30, y: 40, width: 80, height: 120 },
+      viewportSize: { width: window.innerWidth, height: window.innerHeight },
+    });
+  });
+
+  it('cancels screenshot overlay when Escape is pressed', async () => {
+    currentLabel = 'screenshot-overlay';
+
+    render(<App />);
+    fireEvent.keyDown(window, { key: 'Escape' });
+
+    await waitFor(() => expect(cancelScreenshotTranslateMock).toHaveBeenCalledTimes(1));
   });
 
   it('renders settings for other windows', async () => {

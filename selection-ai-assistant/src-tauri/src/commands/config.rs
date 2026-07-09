@@ -1,4 +1,5 @@
 use tauri::{AppHandle, State};
+use tauri_plugin_autostart::ManagerExt;
 
 use crate::app_lifecycle;
 use crate::app_state::AppState;
@@ -23,10 +24,26 @@ pub fn get_config_from_state(state: &AppState) -> Result<AppConfig, PublicError>
 
 #[tauri::command]
 pub fn save_app_behavior_config(
+    app: AppHandle,
     state: State<'_, AppState>,
     preferences: AppBehaviorConfig,
 ) -> Result<AppConfig, PublicError> {
+    sync_launch_at_startup(&app, preferences.launch_at_startup)?;
     save_app_behavior_config_in_state(&state, preferences)
+}
+
+fn sync_launch_at_startup(app: &AppHandle, enabled: bool) -> Result<(), PublicError> {
+    let autostart = app.autolaunch();
+    let result = if enabled {
+        autostart.enable()
+    } else {
+        autostart.disable()
+    };
+
+    result.map_err(|err| PublicError {
+        code: "autostart_update_failed".to_string(),
+        message: format!("更新开机自启设置失败：{err}"),
+    })
 }
 
 pub fn save_app_behavior_config_in_state(
@@ -40,6 +57,7 @@ pub fn save_app_behavior_config_in_state(
 
     let mut candidate = config.clone();
     candidate.hotkey = preferences.hotkey.trim().to_string();
+    candidate.launch_at_startup = preferences.launch_at_startup;
     candidate.start_minimized_to_tray = preferences.start_minimized_to_tray;
     candidate.close_button_behavior = preferences.close_button_behavior;
     candidate.replacement_target_language = preferences.replacement_target_language;
@@ -67,6 +85,7 @@ pub fn confirm_main_window_close(
         &state,
         AppBehaviorConfig {
             hotkey: current.hotkey,
+            launch_at_startup: current.launch_at_startup,
             start_minimized_to_tray: current.start_minimized_to_tray,
             close_button_behavior: behavior,
             replacement_target_language: current.replacement_target_language,

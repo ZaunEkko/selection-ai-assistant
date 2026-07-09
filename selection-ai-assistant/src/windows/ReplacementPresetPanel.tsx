@@ -14,6 +14,7 @@ type ReplacementOption = {
 
 const DEFAULT_APP_BEHAVIOR: AppBehaviorConfig = {
   hotkey: 'Ctrl+Alt+A',
+  launchAtStartup: false,
   startMinimizedToTray: false,
   closeButtonBehavior: 'ask',
   replacementTargetLanguage: 'auto',
@@ -32,6 +33,7 @@ const REPLACEMENT_OPTIONS: ReplacementOption[] = [
 function appBehaviorFromConfig(config: AppBehaviorConfig): AppBehaviorConfig {
   return {
     hotkey: config.hotkey,
+    launchAtStartup: config.launchAtStartup,
     startMinimizedToTray: config.startMinimizedToTray,
     closeButtonBehavior: config.closeButtonBehavior,
     replacementTargetLanguage: config.replacementTargetLanguage,

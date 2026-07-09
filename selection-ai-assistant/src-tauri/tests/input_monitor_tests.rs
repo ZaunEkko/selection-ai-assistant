@@ -3,6 +3,7 @@ use selection_ai_assistant_lib::input_monitor::events::{
     apply_mouse_up_action_to_pending_selection, classify_mouse_up, consume_pending_selection,
     handle_hotkey_state, handle_mouse_button_event, hover_action_for_pending_selection,
     hover_action_for_pending_selection_when_idle, is_drag_distance_met, manual_hotkey_trigger_key,
+    selection_geometry_matches_drag_gesture, selection_rects_match_drag_gesture,
     should_follow_scroll_for_source, visible_floating_button_action_when_idle, HotkeyAction,
     HotkeyKeyState, MouseButtonEvent, MouseUpAction, PendingHotkeyAction, PendingSelection,
     PendingSelectionHoverAction, SelectionMouseUpEffect, VisibleFloatingButton,
@@ -653,6 +654,91 @@ fn visible_floating_button_stays_visible_when_mouse_is_on_assistant_ui() {
             scroll_follow_enabled: true,
         })
     );
+}
+
+#[test]
+fn selection_rects_match_current_drag_gesture() {
+    let rects = [Rect {
+        x: 90.0,
+        y: 88.0,
+        width: 180.0,
+        height: 24.0,
+    }];
+
+    assert!(selection_rects_match_drag_gesture(
+        &rects,
+        Point { x: 100.0, y: 100.0 },
+        Point { x: 260.0, y: 103.0 },
+    ));
+}
+
+#[test]
+fn selection_rects_reject_stale_selection_far_from_current_drag() {
+    let stale_rects = [Rect {
+        x: 520.0,
+        y: 420.0,
+        width: 160.0,
+        height: 24.0,
+    }];
+
+    assert!(!selection_rects_match_drag_gesture(
+        &stale_rects,
+        Point { x: 100.0, y: 100.0 },
+        Point { x: 170.0, y: 104.0 },
+    ));
+}
+
+#[test]
+fn selection_rects_reject_large_control_bounds_for_click_drag() {
+    let control_bounds = [Rect {
+        x: 40.0,
+        y: 40.0,
+        width: 760.0,
+        height: 420.0,
+    }];
+
+    assert!(!selection_rects_match_drag_gesture(
+        &control_bounds,
+        Point { x: 100.0, y: 100.0 },
+        Point { x: 150.0, y: 105.0 },
+    ));
+}
+
+#[test]
+fn selection_geometry_accepts_visual_selection_when_browser_uia_has_no_rects() {
+    assert!(selection_geometry_matches_drag_gesture(
+        &[],
+        Point { x: 100.0, y: 100.0 },
+        Point { x: 260.0, y: 103.0 },
+        true,
+    ));
+}
+
+#[test]
+fn selection_geometry_rejects_empty_uia_rects_without_visual_selection() {
+    assert!(!selection_geometry_matches_drag_gesture(
+        &[],
+        Point { x: 100.0, y: 100.0 },
+        Point { x: 260.0, y: 103.0 },
+        false,
+    ));
+}
+
+#[test]
+fn selection_geometry_rejects_stale_uia_rects_without_visual_selection() {
+    let stale_rects = [Rect {
+        x: 520.0,
+        y: 420.0,
+        width: 160.0,
+        height: 24.0,
+    }];
+
+    assert!(!selection_geometry_matches_drag_gesture(
+        &stale_rects,
+        Point { x: 100.0, y: 100.0 },
+        Point { x: 170.0, y: 104.0 },
+        false,
+    ));
 }
 
 #[test]
