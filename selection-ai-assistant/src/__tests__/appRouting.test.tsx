@@ -12,6 +12,8 @@ const {
   runAiActionMock,
   saveAppBehaviorConfigMock,
   showReplacementPresetPanelMock,
+  setReplacementPresetPanelExpandedMock,
+  focusFloatingButtonMock,
   hideReplacementPresetPanelMock,
   showTranslateResultMock,
   hideTranslateResultMock,
@@ -32,6 +34,8 @@ const {
   runAiActionMock: vi.fn(),
   saveAppBehaviorConfigMock: vi.fn(),
   showReplacementPresetPanelMock: vi.fn(),
+  setReplacementPresetPanelExpandedMock: vi.fn(),
+  focusFloatingButtonMock: vi.fn(),
   hideReplacementPresetPanelMock: vi.fn(),
   showTranslateResultMock: vi.fn(),
   hideTranslateResultMock: vi.fn(),
@@ -133,6 +137,8 @@ vi.mock('../api/tauri', () => ({
   getLatestSourceTextContext: getLatestSourceTextContextMock,
   openPanelFromFloatingButton: openPanelFromFloatingButtonMock,
   showReplacementPresetPanel: showReplacementPresetPanelMock,
+  setReplacementPresetPanelExpanded: setReplacementPresetPanelExpandedMock,
+  focusFloatingButton: focusFloatingButtonMock,
   hideReplacementPresetPanel: hideReplacementPresetPanelMock,
   showTranslateResult: showTranslateResultMock,
   hideTranslateResult: hideTranslateResultMock,
@@ -162,6 +168,8 @@ describe('App routing by Tauri window label', () => {
     saveAppBehaviorConfigMock.mockReset();
     showTranslateResultMock.mockReset();
     showReplacementPresetPanelMock.mockReset();
+    setReplacementPresetPanelExpandedMock.mockReset();
+    focusFloatingButtonMock.mockReset();
     hideReplacementPresetPanelMock.mockReset();
     hideFloatingButtonMock.mockReset();
     replaceSelectedTextMock.mockReset();
@@ -199,6 +207,8 @@ describe('App routing by Tauri window label', () => {
     });
     showTranslateResultMock.mockResolvedValue(undefined);
     showReplacementPresetPanelMock.mockResolvedValue(undefined);
+    setReplacementPresetPanelExpandedMock.mockResolvedValue(undefined);
+    focusFloatingButtonMock.mockResolvedValue(undefined);
     hideReplacementPresetPanelMock.mockResolvedValue(undefined);
     hideTranslateResultMock.mockResolvedValue(undefined);
     hideFloatingButtonMock.mockResolvedValue(undefined);
@@ -260,6 +270,96 @@ describe('App routing by Tauri window label', () => {
       const translateButton = screen.getByRole('button', { name: '翻译文本' });
       fireEvent.mouseMove(translateButton);
 
+      expect(showReplacementPresetPanelMock).toHaveBeenCalledWith('translation');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('resets target preset tracking when the backend hides the secondary window', async () => {
+    vi.useFakeTimers();
+    currentLabel = 'floating-button';
+
+    try {
+      render(<App />);
+      const replaceButton = screen.getByRole('button', { name: '翻译并替换文本' });
+      fireEvent.mouseEnter(replaceButton);
+      await act(async () => {
+        vi.advanceTimersByTime(150);
+      });
+      expect(showReplacementPresetPanelMock).toHaveBeenCalledWith('replacement');
+
+      await act(async () => {
+        emit('target_preset_panel_hidden', null);
+      });
+      showReplacementPresetPanelMock.mockClear();
+      fireEvent.mouseMove(replaceButton);
+      await act(async () => {
+        vi.advanceTimersByTime(150);
+      });
+
+      expect(showReplacementPresetPanelMock).toHaveBeenCalledWith('replacement');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('still executes translation after the target preset panel has opened', async () => {
+    vi.useFakeTimers();
+    currentLabel = 'floating-button';
+    getLatestPanelContextMock.mockResolvedValue({
+      selection: {
+        text: 'hello world',
+        sourceApp: 'manual',
+        windowTitle: 'Manual hotkey',
+        fallbackPoint: { x: 320, y: 240 },
+      },
+      action: 'translateExplain',
+    });
+    runAiActionMock.mockImplementation(async (request: { requestId: string }) => {
+      emit('ai_stream_delta', { requestId: request.requestId, delta: '你好世界' });
+      emit('ai_stream_done', { requestId: request.requestId });
+      return { requestId: request.requestId };
+    });
+
+    try {
+      render(<App />);
+      const toolbar = screen.getByRole('toolbar', { name: '文本操作' });
+      const translateButton = screen.getByRole('button', { name: '翻译文本' });
+      fireEvent.mouseEnter(translateButton);
+      await act(async () => {
+        vi.advanceTimersByTime(150);
+      });
+      expect(showReplacementPresetPanelMock).toHaveBeenCalledWith('translation');
+
+      vi.useRealTimers();
+      fireEvent.click(translateButton);
+
+      await waitFor(() => expect(getLatestPanelContextMock).toHaveBeenCalled());
+      await waitFor(() =>
+        expect(showTranslateResultMock).toHaveBeenCalledWith(
+          { x: 320, y: 240 },
+          'hello world',
+          '',
+          [],
+        ),
+      );
+      expect(hideReplacementPresetPanelMock).toHaveBeenCalled();
+      await waitFor(() => expect(showTranslateResultMock).toHaveBeenCalledTimes(2));
+
+      showReplacementPresetPanelMock.mockClear();
+      vi.useFakeTimers();
+      fireEvent.mouseMove(translateButton);
+      await act(async () => {
+        vi.advanceTimersByTime(150);
+      });
+      expect(showReplacementPresetPanelMock).not.toHaveBeenCalled();
+
+      fireEvent.mouseLeave(toolbar);
+      fireEvent.mouseEnter(translateButton);
+      await act(async () => {
+        vi.advanceTimersByTime(150);
+      });
       expect(showReplacementPresetPanelMock).toHaveBeenCalledWith('translation');
     } finally {
       vi.useRealTimers();
@@ -580,6 +680,8 @@ describe('App routing by Tauri window label', () => {
         expect.objectContaining({ replacementTargetLanguage: 'japanese', replacementCustomTarget: '' }),
       ),
     );
+    await waitFor(() => expect(focusFloatingButtonMock).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(setReplacementPresetPanelExpandedMock).toHaveBeenLastCalledWith(false));
     expect(hideReplacementPresetPanelMock).not.toHaveBeenCalled();
   });
 
@@ -618,6 +720,7 @@ describe('App routing by Tauri window label', () => {
         }),
       ),
     );
+    await waitFor(() => expect(focusFloatingButtonMock).toHaveBeenCalledTimes(1));
     expect(hideReplacementPresetPanelMock).not.toHaveBeenCalled();
   });
 
@@ -645,6 +748,7 @@ describe('App routing by Tauri window label', () => {
       emit('target_preset_context', { kind: 'translation' });
     });
     fireEvent.click(await screen.findByRole('button', { name: '自定' }));
+    await waitFor(() => expect(setReplacementPresetPanelExpandedMock).toHaveBeenCalledWith(true));
     fireEvent.change(screen.getByRole('textbox'), { target: { value: '象形文字风格' } });
     fireEvent.click(screen.getByRole('button', { name: '保存' }));
 
@@ -658,6 +762,7 @@ describe('App routing by Tauri window label', () => {
         }),
       ),
     );
+    await waitFor(() => expect(focusFloatingButtonMock).toHaveBeenCalledTimes(1));
   });
 
   it('does not replace selected text when the replace stream reports an error', async () => {

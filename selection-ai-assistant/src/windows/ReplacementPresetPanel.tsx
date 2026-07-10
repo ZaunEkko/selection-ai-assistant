@@ -1,9 +1,11 @@
 import { listen } from '@tauri-apps/api/event';
 import { useEffect, useState } from 'react';
 import {
+  focusFloatingButton,
   formatCommandError,
   getConfig,
   saveAppBehaviorConfig,
+  setReplacementPresetPanelExpanded,
   type AppBehaviorConfig,
   type OutputTargetPreset,
   type TargetPresetKind,
@@ -159,6 +161,12 @@ export function ReplacementPresetPanel() {
     kind,
   ]);
 
+  useEffect(() => {
+    void setReplacementPresetPanelExpanded(isCustomEditing || saving || Boolean(error)).catch((err: unknown) =>
+      console.error('调整输出目标面板大小失败:', formatCommandError(err)),
+    );
+  }, [error, isCustomEditing, saving]);
+
   async function persistTargetConfig(targetLanguage: OutputTargetPreset, customTarget = customTargetDraft) {
     const normalizedCustomTarget = customTarget.trim();
     if (targetLanguage === 'custom' && !normalizedCustomTarget) {
@@ -197,6 +205,11 @@ export function ReplacementPresetPanel() {
       const nextBehavior = appBehaviorFromConfig(next);
       setAppBehavior(nextBehavior);
       setCustomTargetDraft(selectedCustomTarget(nextBehavior, kind));
+      try {
+        await focusFloatingButton();
+      } catch (focusError) {
+        console.error('恢复迷你操作条焦点失败:', formatCommandError(focusError));
+      }
     } catch (err) {
       setError(formatCommandError(err));
     } finally {

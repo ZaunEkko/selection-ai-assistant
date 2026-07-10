@@ -50,7 +50,8 @@ use crate::{
     commands::{
         panel::{
             floating_button_position_for_selection, hide_floating_button,
-            show_floating_button_at_position, show_floating_button_for_selection,
+            hide_replacement_preset_panel, show_floating_button_at_position,
+            show_floating_button_for_selection,
         },
         screenshot::show_screenshot_overlay_for_point,
         selection::{create_panel_context_for_selection, emit_panel_context},
@@ -85,6 +86,7 @@ use crate::{
 };
 
 const KEY_DOWN: i16 = 0x8000u16 as i16;
+const TARGET_CONTROLS_CLOSE_DELAY: Duration = Duration::from_millis(180);
 const CLIPBOARD_RESTORE_RETRY_COUNT: usize = 2;
 const CLIPBOARD_RESTORE_RETRY_DELAY: Duration = Duration::from_millis(30);
 const SCROLL_FOLLOW_RETRY_COUNT: usize = 2;
@@ -163,6 +165,7 @@ fn start(app: tauri::AppHandle) {
         let mut drag_start: Option<Point> = None;
         let mut pending_selection: Option<PendingSelection> = None;
         let mut visible_floating_button: Option<VisibleFloatingButton> = None;
+        let mut pointer_inside_target_controls = false;
         let mut pending_hotkey = PendingHotkeyAction::default();
         let monitor_started_at = Instant::now();
 
@@ -173,6 +176,7 @@ fn start(app: tauri::AppHandle) {
                     &mut drag_start,
                     &mut pending_selection,
                     &mut visible_floating_button,
+                    &mut pointer_inside_target_controls,
                     event,
                     elapsed_ms(monitor_started_at),
                 );
@@ -210,6 +214,7 @@ fn start(app: tauri::AppHandle) {
                     &mut drag_start,
                     &mut pending_selection,
                     &mut visible_floating_button,
+                    &mut pointer_inside_target_controls,
                     event,
                     elapsed_ms(monitor_started_at),
                 ),
@@ -262,11 +267,71 @@ fn emit_floating_button_pointer_position(app: &tauri::AppHandle, position: Point
     );
 }
 
+fn update_target_controls_pointer_state(
+    app: &tauri::AppHandle,
+    position: Point,
+    was_inside: &mut bool,
+) {
+    let target_rects = target_control_window_rects(app);
+    let is_inside = target_rects
+        .iter()
+        .any(|rect| crate::input_monitor::events::rect_contains(*rect, position));
+    if is_inside == *was_inside {
+        return;
+    }
+    *was_inside = is_inside;
+
+    if is_inside
+        || !app
+            .get_webview_window("replacement-preset")
+            .and_then(|window| window.is_visible().ok())
+            .unwrap_or(false)
+    {
+        return;
+    }
+
+    let app = app.clone();
+    thread::spawn(move || {
+        thread::sleep(TARGET_CONTROLS_CLOSE_DELAY);
+        let Some(position) = cursor_point() else {
+            return;
+        };
+        let target_rects = target_control_window_rects(&app);
+        let is_inside = target_rects
+            .iter()
+            .any(|rect| crate::input_monitor::events::rect_contains(*rect, position));
+        if is_inside {
+            return;
+        }
+
+        let _ = hide_replacement_preset_panel(app);
+    });
+}
+
+fn target_control_window_rects(app: &tauri::AppHandle) -> Vec<Rect> {
+    ["floating-button", "replacement-preset"]
+        .into_iter()
+        .filter_map(|label| app.get_webview_window(label))
+        .filter(|window| window.is_visible().unwrap_or(false))
+        .filter_map(|window| {
+            let position = window.outer_position().ok()?;
+            let size = window.outer_size().ok()?;
+            Some(Rect {
+                x: position.x as f64,
+                y: position.y as f64,
+                width: size.width as f64,
+                height: size.height as f64,
+            })
+        })
+        .collect()
+}
+
 fn handle_mouse_event(
     app: &tauri::AppHandle,
     drag_start: &mut Option<Point>,
     pending_selection: &mut Option<PendingSelection>,
     visible_floating_button: &mut Option<VisibleFloatingButton>,
+    pointer_inside_target_controls: &mut bool,
     event: MouseButtonEvent,
     now_ms: u64,
 ) {
@@ -283,6 +348,7 @@ fn handle_mouse_event(
 
     if let MouseButtonEvent::Move(position) = event {
         emit_floating_button_pointer_position(app, position);
+        update_target_controls_pointer_state(app, position, pointer_inside_target_controls);
         let config = current_config(app).unwrap_or_default();
         match hover_action_for_pending_selection_when_idle(
             pending_selection,
@@ -347,11 +413,12 @@ fn handle_mouse_event(
                 );
 
                 // 检查是否在助手窗口内
-                let in_assistant_window = assistant_window_rects(app)
+                let assistant_rects = assistant_window_rects(app);
+                let in_assistant_window = assistant_rects
                     .iter()
                     .any(|window| crate::input_monitor::events::rect_contains(*window, up_point));
                 trace_selection_monitor(format_args!(
-                    "mouse up: down={down_point:?}, up={up_point:?}, min_drag_distance={min_drag_distance}, is_drag_met={is_drag_met}, in_assistant_window={in_assistant_window}"
+                    "mouse up: down={down_point:?}, up={up_point:?}, min_drag_distance={min_drag_distance}, is_drag_met={is_drag_met}, in_assistant_window={in_assistant_window}, assistant_rects={assistant_rects:?}"
                 ));
 
                 if is_drag_met && !in_assistant_window {
