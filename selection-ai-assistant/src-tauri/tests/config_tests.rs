@@ -3,15 +3,46 @@ use selection_ai_assistant_lib::config::{
 };
 
 #[test]
-fn release_binary_uses_windows_subsystem_to_avoid_console_window() {
+fn replacement_preset_window_shows_without_stealing_focus_on_windows() {
+    let panel_rs_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("src")
+        .join("commands")
+        .join("panel.rs");
+    let panel_rs = std::fs::read_to_string(panel_rs_path).expect("panel.rs should load");
+
+    assert!(
+        panel_rs.contains("SW_SHOWNOACTIVATE")
+            && panel_rs.contains("SW_HIDE")
+            && panel_rs.contains("show_replacement_preset_without_activation(&window)")
+            && panel_rs.contains("hide_replacement_preset_window(&window)")
+            && panel_rs.contains("target_preset_panel_hidden")
+            && panel_rs.contains("if !floating.is_visible().unwrap_or(false)"),
+        "the target preset window must not steal focus or survive after the mini action bar is hidden"
+    );
+}
+
+#[test]
+fn plain_release_build_defaults_to_embedded_custom_protocol() {
+    let cargo_toml_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
+    let cargo_toml = std::fs::read_to_string(cargo_toml_path).expect("Cargo.toml should load");
+
+    assert!(
+        cargo_toml.contains("default = [\"custom-protocol\"]")
+            && cargo_toml.contains("custom-protocol = [\"tauri/custom-protocol\"]"),
+        "plain release builds should embed frontend assets instead of loading the localhost dev URL"
+    );
+}
+
+#[test]
+fn all_windows_binaries_use_gui_subsystem_to_avoid_console_window() {
     let main_rs_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("src")
         .join("main.rs");
     let main_rs = std::fs::read_to_string(main_rs_path).expect("main.rs should load");
 
     assert!(
-        main_rs.contains("windows_subsystem = \"windows\""),
-        "release Windows builds should not open an extra console window next to the app"
+        main_rs.contains("cfg_attr(target_os = \"windows\", windows_subsystem = \"windows\")"),
+        "Windows debug and release builds should not open an extra console window next to the app"
     );
 }
 

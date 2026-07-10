@@ -29,7 +29,7 @@ describe('floating button styles', () => {
     const replacementPresetWindow = tauriConfig.app.windows.find((window: { label?: string }) => window.label === 'replacement-preset');
 
     expect(floatingWindow).toMatchObject({ width: 244, height: 44, shadow: false });
-    expect(replacementPresetWindow).toMatchObject({ width: 420, height: 126, shadow: false, transparent: true });
+    expect(replacementPresetWindow).toMatchObject({ width: 420, height: 78, shadow: false, transparent: true });
     expect(capabilities.windows).toContain('replacement-preset');
     expect(css).toMatch(/\.mini-action-bar-window[\s\S]*place-items:\s*start\s+start/);
     expect(css).toMatch(/\.replacement-preset-window[\s\S]*place-items:\s*start\s+start/);
@@ -42,7 +42,10 @@ describe('floating button styles', () => {
       /const\s+FLOATING_BUTTON_SIZE:\s*WindowSize\s*=\s*WindowSize\s*\{[\s\S]*width:\s*244\.0,[\s\S]*height:\s*44\.0,[\s\S]*\}/,
     );
     expect(panelRs).toMatch(
-      /const\s+REPLACEMENT_PRESET_SIZE:\s*WindowSize\s*=\s*WindowSize\s*\{[\s\S]*width:\s*420\.0,[\s\S]*height:\s*126\.0,[\s\S]*\}/,
+      /const\s+REPLACEMENT_PRESET_COMPACT_SIZE:\s*WindowSize\s*=\s*WindowSize\s*\{[\s\S]*width:\s*420\.0,[\s\S]*height:\s*78\.0,[\s\S]*\}/,
+    );
+    expect(panelRs).toMatch(
+      /const\s+REPLACEMENT_PRESET_EXPANDED_SIZE:\s*WindowSize\s*=\s*WindowSize\s*\{[\s\S]*width:\s*420\.0,[\s\S]*height:\s*126\.0,[\s\S]*\}/,
     );
   });
 

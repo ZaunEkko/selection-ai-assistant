@@ -173,6 +173,7 @@ export function MiniActionBar() {
   const pendingPresetKindRef = useRef<TargetPresetKind | null>(null);
   const isPresetPanelOpenRef = useRef(false);
   const currentPresetKindRef = useRef<TargetPresetKind | null>(null);
+  const suppressPresetUntilPointerLeaveRef = useRef(false);
 
   function clearPresetTimeout() {
     if (openPresetTimeoutRef.current !== null) {
@@ -182,11 +183,15 @@ export function MiniActionBar() {
     pendingPresetKindRef.current = null;
   }
 
-  async function closeReplacementPresetPanel() {
+  function resetPresetPanelTracking() {
     clearPresetTimeout();
     presetVisibilityTokenRef.current += 1;
     isPresetPanelOpenRef.current = false;
     currentPresetKindRef.current = null;
+  }
+
+  async function closeReplacementPresetPanel() {
+    resetPresetPanelTracking();
     try {
       await hideReplacementPresetPanel();
     } catch (err) {
@@ -198,9 +203,7 @@ export function MiniActionBar() {
     clearPresetTimeout();
     if (!isPresetPanelOpenRef.current && currentPresetKindRef.current === null) return;
 
-    presetVisibilityTokenRef.current += 1;
-    isPresetPanelOpenRef.current = false;
-    currentPresetKindRef.current = null;
+    resetPresetPanelTracking();
     void hideReplacementPresetPanel().catch((err: unknown) =>
       console.error('关闭替换目标面板失败:', formatCommandError(err)),
     );
@@ -208,6 +211,7 @@ export function MiniActionBar() {
 
   async function handleReplace() {
     if (isReplacing) return;
+    suppressPresetUntilPointerLeaveRef.current = true;
     setIsReplacing(true);
 
     try {
@@ -239,6 +243,7 @@ export function MiniActionBar() {
 
   async function handleTranslate() {
     if (isTranslating) return;
+    suppressPresetUntilPointerLeaveRef.current = true;
     setIsTranslating(true);
     let anchor: Point | null = null;
     let selectionRects: Rect[] = [];
@@ -335,6 +340,10 @@ export function MiniActionBar() {
       closeTargetPresetPanelIfVisible();
       return;
     }
+    if (suppressPresetUntilPointerLeaveRef.current) {
+      clearPresetTimeout();
+      return;
+    }
 
     handleTargetPresetMouseEnter(action);
   }
@@ -394,9 +403,35 @@ export function MiniActionBar() {
   }
 
   function handleToolbarPointerLeave() {
+    suppressPresetUntilPointerLeaveRef.current = false;
     setActiveToolbarAction(null);
     handleTargetPresetMouseLeave();
   }
+
+  useEffect(() => {
+    let active = true;
+    let unlisten: (() => void) | null = null;
+
+    listen('target_preset_panel_hidden', () => {
+      if (!active) return;
+      resetPresetPanelTracking();
+      setActiveToolbarAction(null);
+    })
+      .then((nextUnlisten) => {
+        if (active) {
+          unlisten = nextUnlisten;
+        } else {
+          nextUnlisten();
+        }
+      })
+      .catch((err: unknown) => console.error('监听输出目标面板关闭失败:', formatCommandError(err)));
+
+    return () => {
+      active = false;
+      unlisten?.();
+      clearPresetTimeout();
+    };
+  }, []);
 
   useEffect(() => {
     let active = true;

@@ -32,7 +32,7 @@ pub fn save_app_behavior_config(
     save_app_behavior_config_in_state(&state, preferences)
 }
 
-fn sync_launch_at_startup(app: &AppHandle, enabled: bool) -> Result<(), PublicError> {
+pub(crate) fn sync_launch_at_startup(app: &AppHandle, enabled: bool) -> Result<(), PublicError> {
     let autostart = app.autolaunch();
     let result = if enabled {
         autostart.enable()
@@ -44,6 +44,23 @@ fn sync_launch_at_startup(app: &AppHandle, enabled: bool) -> Result<(), PublicEr
         code: "autostart_update_failed".to_string(),
         message: format!("更新开机自启设置失败：{err}"),
     })
+}
+
+pub(crate) fn refresh_launch_at_startup_registration(app: &AppHandle, state: &AppState) {
+    let enabled = state
+        .config
+        .lock()
+        .map(|config| config.launch_at_startup)
+        .unwrap_or(false);
+
+    if enabled {
+        if let Err(err) = sync_launch_at_startup(app, true) {
+            eprintln!(
+                "[autostart] failed to refresh startup registration: {}",
+                err.message
+            );
+        }
+    }
 }
 
 pub fn save_app_behavior_config_in_state(

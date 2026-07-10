@@ -237,6 +237,14 @@ export function showReplacementPresetPanel(kind: TargetPresetKind = 'replacement
   return invoke<void>('show_replacement_preset_panel', { kind });
 }
 
+export function setReplacementPresetPanelExpanded(expanded: boolean): Promise<void> {
+  return invoke<void>('set_replacement_preset_panel_expanded', { expanded });
+}
+
+export function focusFloatingButton(): Promise<void> {
+  return invoke<void>('focus_floating_button');
+}
+
 export function hideReplacementPresetPanel(): Promise<void> {
   return invoke<void>('hide_replacement_preset_panel');
 }
