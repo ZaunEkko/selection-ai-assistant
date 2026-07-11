@@ -936,8 +936,25 @@ describe('App routing by Tauri window label', () => {
         targetLanguage: '摩斯密码',
       }),
     );
-    expect(cancelScreenshotTranslateMock).toHaveBeenCalledTimes(1);
+    expect(cancelScreenshotTranslateMock).not.toHaveBeenCalled();
     expect(screen.getByText('拖拽框选不可选中的文字区域')).toBeInTheDocument();
+  });
+
+  it('keeps the screenshot overlay visible when translation validation fails', async () => {
+    currentLabel = 'screenshot-overlay';
+    runScreenshotTranslateMock.mockRejectedValueOnce(new Error('未配置可用的截图翻译服务商'));
+
+    render(<App />);
+    const overlay = screen.getByRole('application', { name: '截图翻译取景层' });
+
+    fireEvent.mouseDown(overlay, { button: 0, clientX: 120, clientY: 20 });
+    fireEvent.mouseMove(overlay, { clientX: 520, clientY: 100 });
+    fireEvent.mouseUp(overlay);
+    fireEvent.click(screen.getByRole('button', { name: '确认本次截图翻译' }));
+
+    expect(await screen.findByText('未配置可用的截图翻译服务商')).toBeInTheDocument();
+    expect(screen.getByRole('application', { name: '截图翻译取景层' })).toBeInTheDocument();
+    expect(cancelScreenshotTranslateMock).not.toHaveBeenCalled();
   });
 
   it('resets pending screenshot selection so a second capture can drag a new region', async () => {

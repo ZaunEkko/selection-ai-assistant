@@ -178,7 +178,6 @@ export function ScreenshotOverlay() {
     setPhase('capturing');
     setMessage('正在识别并翻译截图…');
     try {
-      await cancelScreenshotTranslate();
       await runScreenshotTranslate({
         requestId: newRequestId(),
         rect,

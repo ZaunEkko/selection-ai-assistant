@@ -85,6 +85,13 @@ export function AiPanel() {
       else unlisteners.push(fn);
     });
 
+    listen('source_text_window_hidden', () => {
+      setSourceWindowOpen(false);
+    }).then((fn) => {
+      if (disposed) fn();
+      else unlisteners.push(fn);
+    });
+
     listen<StreamDelta>('ai_stream_delta', (event) => {
       dispatchPanel({ type: 'delta', requestId: event.payload.requestId, delta: event.payload.delta });
     }).then((fn) => {
