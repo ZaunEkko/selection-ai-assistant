@@ -765,6 +765,33 @@ describe('AiPanel Tauri event lifecycle', () => {
     expect(invokeMock).not.toHaveBeenCalledWith('run_ai_follow_up', expect.anything());
   });
 
+  it('resets the source-window toggle when the child window hides itself', async () => {
+    render(<AiPanel />);
+
+    await waitFor(() => expect(listenMock).toHaveBeenCalledWith('source_text_window_hidden', expect.any(Function)));
+    await act(async () => {
+      emit('panel_context', {
+        selection: { id: 'selection-a', text: 'hello world', sourceApp: 'manual', windowTitle: 'Manual hotkey' },
+        action: 'explain',
+      });
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: '在左侧窗口打开原文' }));
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith('show_source_text_window', { text: 'hello world' }));
+    expect(screen.getByRole('button', { name: '关闭左侧原文' })).toHaveAttribute('aria-pressed', 'true');
+
+    await act(async () => {
+      emit('source_text_window_hidden', null);
+    });
+    const reopenButton = screen.getByRole('button', { name: '在左侧窗口打开原文' });
+    expect(reopenButton).toHaveAttribute('aria-pressed', 'false');
+
+    invokeMock.mockClear();
+    fireEvent.click(reopenButton);
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith('show_source_text_window', { text: 'hello world' }));
+    expect(invokeMock).not.toHaveBeenCalledWith('hide_source_text_window');
+  });
+
   it('opens the latest stored selection in the source window when the visible panel text is stale', async () => {
     invokeMock.mockImplementation((command: string) => {
       if (command === 'get_latest_panel_context') {

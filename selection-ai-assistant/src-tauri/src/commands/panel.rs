@@ -543,6 +543,9 @@ pub fn hide_source_text_window(app: AppHandle) -> Result<(), PublicError> {
             .hide()
             .map_err(|err| command_error("hide_failed", err))?;
     }
+    if let Some(panel) = app.get_webview_window("ai-panel") {
+        let _ = panel.emit("source_text_window_hidden", ());
+    }
     Ok(())
 }
 
