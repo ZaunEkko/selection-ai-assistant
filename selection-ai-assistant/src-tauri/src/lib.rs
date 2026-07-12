@@ -11,6 +11,7 @@ pub mod selection;
 pub mod types;
 
 use app_state::AppState;
+use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -18,7 +19,7 @@ pub fn run() {
         .manage(AppState::load_or_default())
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
-            None,
+            Some(vec![app_lifecycle::AUTOSTART_ARG]),
         ))
         .invoke_handler(tauri::generate_handler![
             commands::config::get_config,
@@ -30,6 +31,8 @@ pub fn run() {
             commands::panel::show_floating_button,
             commands::panel::hide_floating_button,
             commands::panel::show_replacement_preset_panel,
+            commands::panel::set_replacement_preset_panel_expanded,
+            commands::panel::focus_floating_button,
             commands::panel::hide_replacement_preset_panel,
             commands::panel::show_ai_panel,
             commands::panel::hide_ai_panel,
@@ -53,6 +56,9 @@ pub fn run() {
             commands::ai::test_provider_connection,
         ])
         .setup(|app| {
+            if let Some(state) = app.try_state::<AppState>() {
+                commands::config::refresh_launch_at_startup_registration(app.handle(), &state);
+            }
             app_lifecycle::setup_background_lifecycle(app)?;
             app_lifecycle::apply_startup_visibility(app)?;
             input_monitor::start_background_monitor(app.handle().clone());

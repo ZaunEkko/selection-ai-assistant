@@ -1,7 +1,17 @@
 use selection_ai_assistant_lib::app_lifecycle::{
-    close_request_action_for_window, should_show_main_window_on_startup, CloseRequestAction,
+    close_request_action_for_window, is_autostart_launch, should_show_main_window_on_startup,
+    CloseRequestAction, AUTOSTART_ARG,
 };
 use selection_ai_assistant_lib::config::{AppConfig, CloseButtonBehavior};
+
+#[test]
+fn autostart_argument_distinguishes_system_startup_from_manual_debug_launch() {
+    assert!(is_autostart_launch([
+        "selection-ai-assistant.exe",
+        AUTOSTART_ARG,
+    ]));
+    assert!(!is_autostart_launch(["selection-ai-assistant.exe"]));
+}
 
 #[test]
 fn default_startup_shows_main_window() {

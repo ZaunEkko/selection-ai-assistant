@@ -34,8 +34,8 @@
       {
         "label": "replacement-preset",
         "title": "Replacement Preset",
-        "width": 260,
-        "height": 92,
+        "width": 420,
+        "height": 78,
         "decorations": false,
         "transparent": true,
         "shadow": false,

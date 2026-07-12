@@ -10,6 +10,7 @@ use crate::{
 };
 
 const MAIN_WINDOW_LABEL: &str = "main";
+pub const AUTOSTART_ARG: &str = "--autostart";
 const TRAY_SHOW_SETTINGS_ID: &str = "show-settings";
 const TRAY_QUIT_ID: &str = "quit";
 
@@ -19,6 +20,14 @@ pub enum CloseRequestAction {
     AskUser,
     MinimizeToTray,
     ExitApp,
+}
+
+pub fn is_autostart_launch<I, S>(args: I) -> bool
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    args.into_iter().any(|arg| arg.as_ref() == AUTOSTART_ARG)
 }
 
 pub fn should_show_main_window_on_startup(config: &AppConfig) -> bool {

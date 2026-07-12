@@ -33,6 +33,44 @@ pub fn build_prompt_messages(action: AiAction, text: &str) -> Vec<ChatMessage> {
     build_prompt_messages_with_target(action, text, None)
 }
 
+fn build_targeted_output_prompt(target: &str, text: &str) -> String {
+    let normalized = target.to_ascii_lowercase();
+    let is_morse = target.contains('摩') || normalized.contains("morse");
+    let is_ancient_or_pictograph = target.contains("甲骨")
+        || target.contains("象形")
+        || target.contains("古文字")
+        || normalized.contains("pictograph");
+    let is_style_rewrite = target.contains("文言")
+        || target.contains("白话")
+        || target.contains("风格")
+        || target.contains("口吻")
+        || target.contains("语气")
+        || target.contains("敬语")
+        || normalized.contains("style");
+
+    if is_morse {
+        return format!(
+            "请把以下内容转换成{target}，并且只输出转换结果。\n要求：\n- 使用标准摩斯密码表示可转换的字母和数字\n- 单词或语义间隔可用 / 分隔\n- 不要解释，不要添加标题，不要使用 Markdown\n- 不要扩展不存在的信息\n\n内容：\n{text}"
+        );
+    }
+
+    if is_ancient_or_pictograph {
+        return format!(
+            "请把以下内容转换成{target}，并且只输出转换结果。\n要求：\n- 这是近似转写，不要求真实考古字形一一对应\n- 优先保留原意，用接近甲骨文、象形文字或古文字气质的表达\n- 不要解释，不要添加标题，不要使用 Markdown\n- 不要扩展不存在的信息\n\n内容：\n{text}"
+        );
+    }
+
+    if is_style_rewrite {
+        return format!(
+            "请把以下内容改写成{target}，并且只输出改写结果。\n要求：\n- 严格遵循目标风格或语体：{target}\n- 保留原文含义、称谓、换行和标点风格\n- 不要解释，不要添加标题，不要使用 Markdown\n- 不要扩展不存在的信息\n\n内容：\n{text}"
+        );
+    }
+
+    format!(
+        "请把以下内容翻译成{target}，并且只输出译文。\n要求：\n- 严格使用目标语言：{target}\n- 不要根据原文语言自动切换到其他目标语言\n- 只输出可直接替换原文的译文，不要解释，不要添加标题，不要使用 Markdown\n- 保留原文的语气、称谓、换行和标点风格\n- 不要扩展不存在的信息\n\n内容：\n{text}"
+    )
+}
+
 pub fn build_prompt_messages_with_target(
     action: AiAction,
     text: &str,
@@ -50,9 +88,7 @@ pub fn build_prompt_messages_with_target(
             "请把以下内容翻译成中文，并用简短语言解释重点。\n要求：\n- 先给自然中文翻译\n- 再给 2-4 条解释\n- 不要扩展不存在的信息\n\n内容：\n{text}"
         ),
         AiAction::TranslateOnly => match target_language {
-            Some(target) => format!(
-                "请把以下内容翻译成{target}，并且只输出译文。\n要求：\n- 严格使用目标语言：{target}\n- 不要根据原文语言自动切换到其他目标语言\n- 只输出可直接替换原文的译文，不要解释，不要添加标题，不要使用 Markdown\n- 保留原文的语气、称谓、换行和标点风格\n- 不要扩展不存在的信息\n\n内容：\n{text}"
-            ),
+            Some(target) => build_targeted_output_prompt(target, text),
             None => format!(
                 "请把以下内容翻译成目标语言，并且只输出译文。\n要求：\n- 如果原文主要是中文，翻译成自然英文\n- 如果原文主要是英文或其他语言，翻译成自然中文\n- 只输出译文，不要解释，不要添加标题，不要使用 Markdown\n- 不要扩展不存在的信息\n\n内容：\n{text}"
             ),
