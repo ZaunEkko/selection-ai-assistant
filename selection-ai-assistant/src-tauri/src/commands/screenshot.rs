@@ -26,6 +26,7 @@ pub struct RunScreenshotTranslateRequest {
     pub rect: Rect,
     #[serde(default)]
     pub viewport_size: Option<ScreenshotViewportSize>,
+    pub target_language: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, serde::Deserialize, serde::Serialize)]
@@ -99,6 +100,13 @@ pub async fn run_screenshot_translate(
         request.request_id.trim().to_string()
     };
 
+    let target_language = request
+        .target_language
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+
     let (provider, api_key) = default_provider_with_api_key(&state)?;
     if provider.provider_kind != AiProviderKind::OpenAiCompatible {
         return Err(command_error(
@@ -129,6 +137,7 @@ pub async fn run_screenshot_translate(
             api_key,
             request_id,
             image_data_url,
+            target_language,
         )
         .await;
     });
@@ -142,16 +151,17 @@ async fn stream_screenshot_translate(
     api_key: String,
     request_id: String,
     image_data_url: String,
+    target_language: Option<String>,
 ) {
-    let system_prompt = "你是一个 Windows 桌面截图翻译助手。只根据用户提供的截图内容进行 OCR 和翻译，不联网，不编造来源。";
-    let user_prompt = "请识别截图中的可见文字，并翻译成自然中文。要求：\n- 如果截图里没有可读文字，只回答“未识别到可翻译文字”。\n- 先输出译文，不要添加标题。\n- 对很短的 UI 文案保持简洁。\n- 不要解释截图以外的信息。";
+    let system_prompt = "你是一个 Windows 桌面截图翻译助手。只根据用户提供的截图内容进行 OCR、翻译或转换，不联网，不编造来源。";
+    let user_prompt = build_screenshot_translate_prompt(target_language.as_deref());
     let stream_result = timeout(
         SCREENSHOT_TRANSLATE_TIMEOUT,
         OpenAiCompatibleClient::new().stream_vision_chat(
             &provider,
             &api_key,
             system_prompt,
-            user_prompt,
+            &user_prompt,
             image_data_url,
             |delta| {
                 let _ = app.emit(
@@ -186,6 +196,51 @@ async fn stream_screenshot_translate(
             "requestId": request_id,
         }),
     );
+}
+
+pub fn build_screenshot_translate_prompt(target_language: Option<&str>) -> String {
+    let target = target_language
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let Some(target) = target else {
+        return "请识别截图中的可见文字，并翻译成自然中文。要求：\n- 如果截图里没有可读文字，只回答“未识别到可翻译文字”。\n- 先输出译文，不要添加标题。\n- 对很短的 UI 文案保持简洁。\n- 不要解释截图以外的信息。".to_string();
+    };
+
+    let normalized = target.to_ascii_lowercase();
+    let is_morse = target.contains('摩') || normalized.contains("morse");
+    let is_ancient_or_pictograph = target.contains("甲骨")
+        || target.contains("象形")
+        || target.contains("古文字")
+        || normalized.contains("pictograph");
+    let is_style_rewrite = target.contains("文言")
+        || target.contains("白话")
+        || target.contains("风格")
+        || target.contains("口吻")
+        || target.contains("语气")
+        || target.contains("敬语")
+        || normalized.contains("style");
+
+    if is_morse {
+        return format!(
+            "请先识别截图中的可见文字，再把识别到的文字转换成{target}，并且只输出转换结果。要求：\n- 如果截图里没有可读文字，只回答“未识别到可翻译文字”。\n- 使用标准摩斯密码表示可转换的字母和数字。\n- 单词或语义间隔可用 / 分隔。\n- 不要解释，不要添加标题，不要使用 Markdown。\n- 不要描述截图画面，不要扩展截图以外的信息。"
+        );
+    }
+
+    if is_ancient_or_pictograph {
+        return format!(
+            "请先识别截图中的可见文字，再把识别到的文字转换成{target}，并且只输出转换结果。要求：\n- 如果截图里没有可读文字，只回答“未识别到可翻译文字”。\n- 这是近似转写，不要求真实考古字形一一对应。\n- 优先保留原意，用接近甲骨文、象形文字或古文字气质的表达。\n- 不要解释，不要添加标题，不要使用 Markdown。\n- 不要描述截图画面，不要扩展截图以外的信息。"
+        );
+    }
+
+    if is_style_rewrite {
+        return format!(
+            "请先识别截图中的可见文字，再把识别到的文字改写成{target}，并且只输出改写结果。要求：\n- 如果截图里没有可读文字，只回答“未识别到可翻译文字”。\n- 严格遵循目标风格或语体：{target}。\n- 保留识别文字的原意、称谓、换行和标点风格。\n- 不要解释，不要添加标题，不要使用 Markdown。\n- 不要描述截图画面，不要扩展截图以外的信息。"
+        );
+    }
+
+    format!(
+        "请先识别截图中的可见文字，再把识别到的文字翻译成{target}，并且只输出译文。要求：\n- 如果截图里没有可读文字，只回答“未识别到可翻译文字”。\n- 严格使用目标语言：{target}。\n- 不要根据截图文字语言自动切换到其他目标语言。\n- 不要解释，不要添加标题，不要使用 Markdown。\n- 对很短的 UI 文案保持简洁。\n- 不要描述截图画面，不要扩展截图以外的信息。"
+    )
 }
 
 fn show_screenshot_translate_result(

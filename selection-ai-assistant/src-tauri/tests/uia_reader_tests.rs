@@ -62,6 +62,46 @@ fn focused_password_control_blocks_window_geometry_and_drag_fallback() {
 }
 
 #[test]
+fn point_selection_with_geometry_beats_focused_text_without_geometry() {
+    let focused = UiaSelectionResult {
+        text: Some("focused browser root".to_string()),
+        rects: Vec::new(),
+        is_password_control: false,
+        confidence: SelectionConfidence::High,
+    };
+    let point = result("selected page text", 240.0);
+
+    let selected =
+        UiaSelectionResult::prefer_best_attempt([Some(focused), Some(point)]).expect("selection");
+
+    assert_eq!(selected.text.as_deref(), Some("selected page text"));
+    assert_eq!(selected.rects[0].x, 240.0);
+}
+
+#[test]
+fn password_attempt_blocks_point_and_window_results() {
+    let focused_password = UiaSelectionResult {
+        text: None,
+        rects: Vec::new(),
+        is_password_control: true,
+        confidence: SelectionConfidence::Low,
+    };
+    let point = result("selected page text", 240.0);
+    let window = result("window text", 100.0);
+
+    let selected = UiaSelectionResult::prefer_best_attempt([
+        Some(focused_password),
+        Some(point),
+        Some(window),
+    ])
+    .expect("password result");
+
+    assert!(selected.is_password_control);
+    assert_eq!(selected.text, None);
+    assert!(selected.rects.is_empty());
+}
+
+#[test]
 fn window_selection_is_used_when_focused_element_has_no_selection() {
     let window = result("top level", 100.0);
 

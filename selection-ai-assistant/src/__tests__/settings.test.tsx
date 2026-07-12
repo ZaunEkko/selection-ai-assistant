@@ -87,6 +87,8 @@ const config: AppConfig = {
   closeButtonBehavior: 'ask',
   replacementTargetLanguage: 'auto',
   replacementCustomTarget: '',
+  translationTargetLanguage: 'auto',
+  translationCustomTarget: '',
   disabledApps: ['1Password.exe', 'KeePassXC.exe', 'Bitwarden.exe', 'mstsc.exe', 'AnyDesk.exe', 'TeamViewer.exe'],
 };
 
@@ -198,6 +200,8 @@ describe('Settings', () => {
         closeButtonBehavior: 'exitApp',
         replacementTargetLanguage: 'auto',
         replacementCustomTarget: '',
+        translationTargetLanguage: 'auto',
+        translationCustomTarget: '',
       });
     });
     expect(screen.getByLabelText('截图翻译快捷键')).toHaveValue('Ctrl+Alt+T');

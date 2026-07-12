@@ -32,7 +32,7 @@ pub fn save_app_behavior_config(
     save_app_behavior_config_in_state(&state, preferences)
 }
 
-fn sync_launch_at_startup(app: &AppHandle, enabled: bool) -> Result<(), PublicError> {
+pub(crate) fn sync_launch_at_startup(app: &AppHandle, enabled: bool) -> Result<(), PublicError> {
     let autostart = app.autolaunch();
     let result = if enabled {
         autostart.enable()
@@ -44,6 +44,23 @@ fn sync_launch_at_startup(app: &AppHandle, enabled: bool) -> Result<(), PublicEr
         code: "autostart_update_failed".to_string(),
         message: format!("更新开机自启设置失败：{err}"),
     })
+}
+
+pub(crate) fn refresh_launch_at_startup_registration(app: &AppHandle, state: &AppState) {
+    let enabled = state
+        .config
+        .lock()
+        .map(|config| config.launch_at_startup)
+        .unwrap_or(false);
+
+    if enabled {
+        if let Err(err) = sync_launch_at_startup(app, true) {
+            eprintln!(
+                "[autostart] failed to refresh startup registration: {}",
+                err.message
+            );
+        }
+    }
 }
 
 pub fn save_app_behavior_config_in_state(
@@ -62,6 +79,8 @@ pub fn save_app_behavior_config_in_state(
     candidate.close_button_behavior = preferences.close_button_behavior;
     candidate.replacement_target_language = preferences.replacement_target_language;
     candidate.replacement_custom_target = preferences.replacement_custom_target.trim().to_string();
+    candidate.translation_target_language = preferences.translation_target_language;
+    candidate.translation_custom_target = preferences.translation_custom_target.trim().to_string();
 
     if let Some(path) = &state.settings_path {
         candidate.save_to_path(path).map_err(|err| PublicError {
@@ -90,6 +109,8 @@ pub fn confirm_main_window_close(
             close_button_behavior: behavior,
             replacement_target_language: current.replacement_target_language,
             replacement_custom_target: current.replacement_custom_target,
+            translation_target_language: current.translation_target_language,
+            translation_custom_target: current.translation_custom_target,
         },
     )?;
 
