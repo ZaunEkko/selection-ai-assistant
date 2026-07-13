@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   formatCommandError,
   getConfig,
+  getRuntimePreferences,
   getLatestPanelContext,
   getPlatformCapabilities,
   listProviderModels,
@@ -13,7 +14,7 @@ import {
   showScreenshotOverlay,
   startDragAiPanel,
   testProviderConnection,
-  type AiProviderConfig,
+  type ProviderUpdate,
 } from '../api/tauri';
 
 const { invokeMock, startDraggingMock } = vi.hoisted(() => ({
@@ -69,35 +70,37 @@ describe('Tauri API wrappers', () => {
   });
 
   it('invokes config commands with expected payloads', async () => {
-    const provider: AiProviderConfig = {
+    const provider: ProviderUpdate = {
+      originalProviderId: null,
       id: 'openai',
       name: 'OpenAI',
       baseUrl: 'https://api.openai.com/v1',
       model: 'gpt-test',
       providerKind: 'openAiCompatible',
-      apiKey: 'dummy-api-key',
+      apiKey: { action: 'replace', value: 'dummy-api-key' },
       apiKeyRef: 'credential://openai',
-      headers: [],
     };
     invokeMock.mockResolvedValue({ providers: [provider] });
 
     await getConfig();
+    await getRuntimePreferences();
     await saveProviderConfig(provider);
 
     expect(invokeMock).toHaveBeenNthCalledWith(1, 'get_config');
-    expect(invokeMock).toHaveBeenNthCalledWith(2, 'save_provider_config', { provider });
+    expect(invokeMock).toHaveBeenNthCalledWith(2, 'get_runtime_preferences');
+    expect(invokeMock).toHaveBeenNthCalledWith(3, 'save_provider_config', { provider });
   });
 
   it('invokes provider model and connection commands with provider payloads', async () => {
-    const provider: AiProviderConfig = {
+    const provider: ProviderUpdate = {
+      originalProviderId: null,
       id: 'openai',
       name: 'OpenAI',
       baseUrl: 'https://api.openai.com/v1',
       model: '',
       providerKind: 'openAiCompatible',
-      apiKey: 'dummy-api-key',
+      apiKey: { action: 'replace', value: 'dummy-api-key' },
       apiKeyRef: 'credential://openai',
-      headers: [],
     };
     invokeMock.mockResolvedValueOnce(['gpt-test']).mockResolvedValueOnce({ success: true, modelCount: 1, modelListAvailable: true });
 

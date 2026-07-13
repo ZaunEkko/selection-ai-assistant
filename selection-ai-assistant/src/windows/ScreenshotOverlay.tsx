@@ -3,7 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   cancelScreenshotTranslate,
   formatCommandError,
-  getConfig,
+  getRuntimePreferences,
   runScreenshotTranslate,
   type OutputTargetPreset,
   type Point,
@@ -124,7 +124,7 @@ export function ScreenshotOverlay() {
 
   useEffect(() => {
     let active = true;
-    getConfig()
+    getRuntimePreferences()
       .then((config) => {
         if (!active) return;
         setTargetPreset(config.translationTargetLanguage);

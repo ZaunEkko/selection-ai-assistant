@@ -322,17 +322,10 @@ fn redaction_secrets(provider: &AiProviderConfig, api_key: &str) -> Vec<String> 
     if !api_key.is_empty() {
         secrets.push(api_key.to_string());
     }
-    for (name, value) in &provider.headers {
-        let normalized = name.trim().to_ascii_lowercase();
-        if !value.trim().is_empty()
-            && (normalized == "authorization"
-                || normalized == "proxy-authorization"
-                || normalized.contains("api-key")
-                || normalized.contains("apikey")
-                || normalized.contains("token")
-                || normalized.contains("secret"))
-        {
-            secrets.push(value.trim().to_string());
+    for (_, value) in &provider.headers {
+        let value = value.trim();
+        if !value.is_empty() {
+            secrets.push(value.to_string());
         }
     }
     secrets

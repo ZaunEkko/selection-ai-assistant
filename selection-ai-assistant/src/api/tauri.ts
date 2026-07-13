@@ -3,15 +3,31 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 
 export type AiProviderKind = 'openAiCompatible' | 'anthropic' | 'gemini';
 
-export type AiProviderConfig = {
+export type ProviderConfigView = {
   id: string;
   name: string;
   baseUrl: string;
   model: string;
   providerKind: AiProviderKind;
-  apiKey: string;
+  apiKeyConfigured: boolean;
   apiKeyRef: string;
-  headers: Array<[string, string]>;
+  customHeadersConfigured: boolean;
+};
+
+export type SecretUpdate =
+  | { action: 'keep' }
+  | { action: 'replace'; value: string }
+  | { action: 'clear' };
+
+export type ProviderUpdate = {
+  originalProviderId: string | null;
+  id: string;
+  name: string;
+  baseUrl: string;
+  model: string;
+  providerKind: AiProviderKind;
+  apiKey: SecretUpdate;
+  apiKeyRef: string;
 };
 
 export type CloseButtonBehavior = 'ask' | 'minimizeToTray' | 'exitApp';
@@ -40,19 +56,14 @@ export type AppBehaviorConfig = {
   translationCustomTarget: string;
 };
 
-export type AppConfig = {
+export type RuntimePreferences = AppBehaviorConfig;
+
+export type SettingsConfigView = {
   defaultProviderId: string | null;
-  providers: AiProviderConfig[];
-  hoverRadius: number;
-  hoverDelayMs: number;
-  candidateTimeoutMs: number;
-  minDragDistance: number;
+  providers: ProviderConfigView[];
   hotkey: string;
   launchAtStartup: boolean;
   clipboardFallbackEnabled: boolean;
-  showClipboardPrivacyWarningOnFirstUse: boolean;
-  disableInElevatedWindows: boolean;
-  manualHotkeyAlwaysEnabled: boolean;
   startMinimizedToTray: boolean;
   closeButtonBehavior: CloseButtonBehavior;
   replacementTargetLanguage: ReplacementTargetLanguage;
@@ -82,31 +93,35 @@ export function getPlatformCapabilities(): Promise<PlatformCapabilities> {
   return invoke<PlatformCapabilities>('get_platform_capabilities');
 }
 
-export function getConfig(): Promise<AppConfig> {
-  return invoke<AppConfig>('get_config');
+export function getConfig(): Promise<SettingsConfigView> {
+  return invoke<SettingsConfigView>('get_config');
 }
 
-export function saveProviderConfig(provider: AiProviderConfig): Promise<AppConfig> {
-  return invoke<AppConfig>('save_provider_config', { provider });
+export function getRuntimePreferences(): Promise<RuntimePreferences> {
+  return invoke<RuntimePreferences>('get_runtime_preferences');
 }
 
-export function setDefaultProvider(providerId: string): Promise<AppConfig> {
-  return invoke<AppConfig>('set_default_provider', { providerId });
+export function saveProviderConfig(provider: ProviderUpdate): Promise<SettingsConfigView> {
+  return invoke<SettingsConfigView>('save_provider_config', { provider });
 }
 
-export function deleteProvider(providerId: string): Promise<AppConfig> {
-  return invoke<AppConfig>('delete_provider', { providerId });
+export function setDefaultProvider(providerId: string): Promise<SettingsConfigView> {
+  return invoke<SettingsConfigView>('set_default_provider', { providerId });
 }
 
-export function saveAppBehaviorConfig(preferences: AppBehaviorConfig): Promise<AppConfig> {
-  return invoke<AppConfig>('save_app_behavior_config', { preferences });
+export function deleteProvider(providerId: string): Promise<SettingsConfigView> {
+  return invoke<SettingsConfigView>('delete_provider', { providerId });
 }
 
-export function confirmMainWindowClose(behavior: CloseButtonBehavior): Promise<AppConfig> {
-  return invoke<AppConfig>('confirm_main_window_close', { behavior });
+export function saveAppBehaviorConfig(preferences: AppBehaviorConfig): Promise<RuntimePreferences> {
+  return invoke<RuntimePreferences>('save_app_behavior_config', { preferences });
 }
 
-export function listProviderModels(provider: AiProviderConfig): Promise<string[]> {
+export function confirmMainWindowClose(behavior: CloseButtonBehavior): Promise<RuntimePreferences> {
+  return invoke<RuntimePreferences>('confirm_main_window_close', { behavior });
+}
+
+export function listProviderModels(provider: ProviderUpdate): Promise<string[]> {
   return invoke<string[]>('list_provider_models', { provider });
 }
 
@@ -116,7 +131,7 @@ export type TestProviderConnectionResult = {
   modelListAvailable: boolean;
 };
 
-export function testProviderConnection(provider: AiProviderConfig): Promise<TestProviderConnectionResult> {
+export function testProviderConnection(provider: ProviderUpdate): Promise<TestProviderConnectionResult> {
   return invoke<TestProviderConnectionResult>('test_provider_connection', { provider });
 }
 

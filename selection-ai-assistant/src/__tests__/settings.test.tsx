@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { Settings } from '../windows/Settings';
-import type { AppConfig } from '../api/tauri';
+import type { AppBehaviorConfig, SettingsConfigView } from '../api/tauri';
 
 type Listener<T = unknown> = (event: { payload: T }) => void;
 
@@ -59,7 +59,7 @@ vi.mock('../api/tauri', async () => {
   };
 });
 
-const config: AppConfig = {
+const config: SettingsConfigView = {
   defaultProviderId: 'openrouter',
   providers: [
     {
@@ -68,21 +68,14 @@ const config: AppConfig = {
       baseUrl: 'https://openrouter.ai/api/v1',
       model: 'anthropic/claude-sonnet-4.5',
       providerKind: 'openAiCompatible',
-      apiKey: 'dummy-api-key',
+      apiKeyConfigured: true,
       apiKeyRef: 'credential://openrouter',
-      headers: [],
+      customHeadersConfigured: false,
     },
   ],
-  hoverRadius: 90,
-  hoverDelayMs: 220,
-  candidateTimeoutMs: 4000,
-  minDragDistance: 6,
   hotkey: 'Ctrl+Alt+A',
   launchAtStartup: false,
   clipboardFallbackEnabled: true,
-  showClipboardPrivacyWarningOnFirstUse: true,
-  disableInElevatedWindows: true,
-  manualHotkeyAlwaysEnabled: true,
   startMinimizedToTray: false,
   closeButtonBehavior: 'ask',
   replacementTargetLanguage: 'auto',
@@ -150,6 +143,30 @@ describe('Settings', () => {
     }
   });
 
+  it('does not return the saved API key to the provider form', async () => {
+    render(<Settings />);
+
+    await screen.findByText(/已保存 API 密钥；留空会保持不变/);
+    const apiKeyInput = screen.getByLabelText('API 密钥');
+    expect(apiKeyInput).toHaveValue('');
+    expect(apiKeyInput).toHaveAttribute('placeholder', '留空以保留已保存密钥');
+  });
+
+  it('sends an explicit clear action for a saved API key', async () => {
+    render(<Settings />);
+    await screen.findByRole('heading', { name: '设置' });
+
+    fireEvent.click(await screen.findByRole('button', { name: '清除已保存密钥' }));
+    expect(screen.getByText(/保存后会清除已保存的 API 密钥/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '保存服务商' }));
+
+    await waitFor(() => {
+      expect(saveProviderConfigMock).toHaveBeenCalledWith(
+        expect.objectContaining({ originalProviderId: 'openrouter', apiKey: { action: 'clear' } }),
+      );
+    });
+  });
+
   it('shows platform fallback guidance when automatic selection is not available', async () => {
     getPlatformCapabilitiesMock.mockResolvedValueOnce({
       platform: 'linux',
@@ -172,12 +189,15 @@ describe('Settings', () => {
   });
 
   it('saves startup, close button behavior, and screenshot hotkey preferences', async () => {
-    const nextConfig: AppConfig = {
-      ...config,
+    const nextConfig: AppBehaviorConfig = {
       hotkey: 'Ctrl+Alt+T',
       launchAtStartup: true,
       startMinimizedToTray: true,
       closeButtonBehavior: 'exitApp',
+      replacementTargetLanguage: 'auto',
+      replacementCustomTarget: '',
+      translationTargetLanguage: 'auto',
+      translationCustomTarget: '',
     };
     saveAppBehaviorConfigMock.mockResolvedValue(nextConfig);
     render(<Settings />);
@@ -237,9 +257,9 @@ describe('Settings', () => {
           baseUrl: 'https://api.openai.com/v1',
           model: 'gpt-4.1-mini',
           providerKind: 'openAiCompatible',
-          apiKey: 'openai-key',
+          apiKeyConfigured: true,
           apiKeyRef: 'credential://openai',
-          headers: [],
+          customHeadersConfigured: false,
         },
         {
           ...config.providers[0],
@@ -268,6 +288,24 @@ describe('Settings', () => {
     expect(screen.getByLabelText('模型')).toHaveValue('claude-sonnet-4-6');
   });
 
+  it('does not carry saved credentials into a different provider preset', async () => {
+    render(<Settings />);
+    await screen.findByRole('heading', { name: '设置' });
+
+    fireEvent.change(screen.getByLabelText('厂商预设'), { target: { value: 'anthropic' } });
+    fireEvent.click(screen.getByRole('button', { name: '加载模型列表' }));
+
+    await waitFor(() => {
+      expect(listProviderModelsMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          originalProviderId: null,
+          id: 'anthropic',
+          apiKey: { action: 'keep' },
+        }),
+      );
+    });
+  });
+
   it('includes required domestic and platform provider presets', async () => {
     render(<Settings />);
     await screen.findByRole('heading', { name: '设置' });
@@ -292,7 +330,7 @@ describe('Settings', () => {
     }
   });
 
-  it('saves provider config including API key and refreshes displayed provider list', async () => {
+  it('saves provider config with an explicit API key replacement and refreshes the provider list', async () => {
     const nextConfig = {
       ...config,
       providers: [{ ...config.providers[0], model: 'openai/gpt-4.1' }],
@@ -314,7 +352,11 @@ describe('Settings', () => {
 
     await waitFor(() => {
       expect(saveProviderConfigMock).toHaveBeenCalledWith(
-        expect.objectContaining({ model: 'openai/gpt-4.1', apiKey: 'updated-dummy-key' }),
+        expect.objectContaining({
+          originalProviderId: 'openrouter',
+          model: 'openai/gpt-4.1',
+          apiKey: { action: 'replace', value: 'updated-dummy-key' },
+        }),
       );
     });
     expect(await screen.findByText(/OpenRouter — openai\/gpt-4\.1/)).toBeInTheDocument();
@@ -339,7 +381,9 @@ describe('Settings', () => {
     });
 
     await waitFor(() => {
-      expect(listProviderModelsMock).toHaveBeenCalledWith(expect.objectContaining({ apiKey: 'dummy-api-key' }));
+      expect(listProviderModelsMock).toHaveBeenCalledWith(
+        expect.objectContaining({ originalProviderId: 'openrouter', apiKey: { action: 'keep' } }),
+      );
     });
     expect(screen.getByRole('status')).toHaveTextContent('已加载 2 个模型。');
     expect(modelInput).toHaveValue('openai/gpt-4.1');

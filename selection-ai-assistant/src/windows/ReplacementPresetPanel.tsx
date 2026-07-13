@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react';
 import {
   focusFloatingButton,
   formatCommandError,
-  getConfig,
+  getRuntimePreferences,
   saveAppBehaviorConfig,
   setReplacementPresetPanelExpanded,
   type AppBehaviorConfig,
@@ -109,7 +109,7 @@ export function ReplacementPresetPanel() {
   useEffect(() => {
     let active = true;
 
-    getConfig()
+    getRuntimePreferences()
       .then((config) => {
         if (!active) return;
         const nextBehavior = appBehaviorFromConfig(config);

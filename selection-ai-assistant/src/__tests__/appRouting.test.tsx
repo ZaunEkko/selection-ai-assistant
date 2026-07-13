@@ -106,6 +106,18 @@ vi.mock('../api/tauri', () => ({
       disabledApps: [],
     }),
   ),
+  getRuntimePreferences: vi.fn(() =>
+    Promise.resolve({
+      hotkey: 'Ctrl+Alt+A',
+      launchAtStartup: false,
+      startMinimizedToTray: false,
+      closeButtonBehavior: 'ask',
+      replacementTargetLanguage: 'korean',
+      replacementCustomTarget: '',
+      translationTargetLanguage: 'morseCode',
+      translationCustomTarget: '',
+    }),
+  ),
   saveProviderConfig: vi.fn(),
   saveAppBehaviorConfig: saveAppBehaviorConfigMock,
   getPlatformCapabilities: vi.fn(() =>
