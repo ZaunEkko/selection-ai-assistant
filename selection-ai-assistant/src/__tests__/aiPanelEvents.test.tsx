@@ -634,7 +634,8 @@ describe('AiPanel Tauri event lifecycle', () => {
     expect(screen.queryByText(/\*\*重点内容\*\*/)).not.toBeInTheDocument();
   });
 
-  it('renders streamed markdown as preview content including safe images', async () => {
+  it('renders streamed markdown as preview content including embedded raster images', async () => {
+    const embeddedImage = 'data:image/png;base64,aGVsbG8=';
     render(<AiPanel />);
 
     await waitFor(() => expect(listenMock).toHaveBeenCalledWith('panel_context', expect.any(Function)));
@@ -650,12 +651,12 @@ describe('AiPanel Tauri event lifecycle', () => {
     await act(async () => {
       emit('ai_stream_delta', {
         requestId: 'frontend-request-1',
-        delta: '# 标题\n\n![预览图](https://example.com/preview.png)\n\n- 要点一',
+        delta: `# 标题\n\n![预览图](${embeddedImage})\n\n- 要点一`,
       });
     });
 
     expect(screen.getByRole('heading', { name: '标题' })).toBeInTheDocument();
-    expect(screen.getByRole('img', { name: '预览图' })).toHaveAttribute('src', 'https://example.com/preview.png');
+    expect(screen.getByRole('img', { name: '预览图' })).toHaveAttribute('src', embeddedImage);
     expect(screen.getByText('要点一')).toBeInTheDocument();
   });
 
@@ -705,7 +706,7 @@ describe('AiPanel Tauri event lifecycle', () => {
     });
 
     expect(screen.queryByRole('img', { name: '危险图' })).not.toBeInTheDocument();
-    expect(screen.getByText(/已隐藏不安全图片/)).toBeInTheDocument();
+    expect(screen.getByText(/远程图片已阻止/)).toBeInTheDocument();
   });
 
   it('collapses long selected text by default and expands it on click', async () => {
