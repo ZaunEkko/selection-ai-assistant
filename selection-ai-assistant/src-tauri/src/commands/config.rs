@@ -225,7 +225,13 @@ pub fn save_provider_update_in_state(
     let mut config = state.config.lock().map_err(config_lock_error)?;
     let provider = update.resolve(&config);
     let storage_provider_id = update.storage_provider_id().to_string();
+    let original_provider_id = update
+        .original_provider_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
     validate_provider(&provider)?;
+    validate_provider_id_available(&config, &provider.id, original_provider_id)?;
     save_provider_locked(
         &mut config,
         state.settings_path.as_deref(),
@@ -271,6 +277,24 @@ fn save_provider_locked(
 
     *config = candidate.clone();
     Ok(candidate)
+}
+
+fn validate_provider_id_available(
+    config: &AppConfig,
+    provider_id: &str,
+    original_provider_id: Option<&str>,
+) -> Result<(), PublicError> {
+    let has_conflict = config.providers.iter().any(|provider| {
+        provider.id == provider_id && Some(provider.id.as_str()) != original_provider_id
+    });
+    if has_conflict {
+        return Err(PublicError {
+            code: "provider_id_conflict".to_string(),
+            message: format!("Provider with id '{provider_id}' already exists."),
+        });
+    }
+
+    Ok(())
 }
 
 fn validate_provider(provider: &AiProviderConfig) -> Result<(), PublicError> {
