@@ -258,12 +258,13 @@ export function ProviderForm({ initialProvider, onSave }: Props) {
     const preset = providerPresets.find((item) => item.key === key);
     if (!preset) return;
 
+    const matchingInitialProvider = initialProvider?.id === preset.provider.id ? initialProvider : undefined;
     setProvider(preset.provider);
-    setOriginalProviderId(null);
+    setOriginalProviderId(matchingInitialProvider?.id ?? null);
     setApiKeyInput('');
     setClearApiKey(false);
-    setApiKeyConfigured(false);
-    setCustomHeadersConfigured(false);
+    setApiKeyConfigured(matchingInitialProvider?.apiKeyConfigured ?? false);
+    setCustomHeadersConfigured(matchingInitialProvider?.customHeadersConfigured ?? false);
     setModels([]);
     setModelsOpen(false);
     setFeedback(null);

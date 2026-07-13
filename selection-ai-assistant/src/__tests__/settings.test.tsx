@@ -306,6 +306,45 @@ describe('Settings', () => {
     });
   });
 
+  it('preserves edit identity and saved credentials for the matching provider preset', async () => {
+    const openAiConfig: SettingsConfigView = {
+      ...config,
+      defaultProviderId: 'openai',
+      providers: [
+        {
+          id: 'openai',
+          name: 'Custom OpenAI',
+          baseUrl: 'https://proxy.example/v1',
+          model: 'custom-model',
+          providerKind: 'openAiCompatible',
+          apiKeyConfigured: true,
+          apiKeyRef: 'credential://openai',
+          customHeadersConfigured: true,
+        },
+      ],
+    };
+    getConfigMock.mockResolvedValue(openAiConfig);
+    saveProviderConfigMock.mockResolvedValue(openAiConfig);
+    render(<Settings />);
+    await screen.findByRole('heading', { name: '设置' });
+
+    fireEvent.change(screen.getByLabelText('厂商预设'), { target: { value: 'openai' } });
+
+    expect(screen.getByLabelText('API 密钥')).toHaveAttribute('placeholder', '留空以保留已保存密钥');
+    expect(screen.getByText(/已配置自定义请求头/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '保存服务商' }));
+
+    await waitFor(() => {
+      expect(saveProviderConfigMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          originalProviderId: 'openai',
+          id: 'openai',
+          apiKey: { action: 'keep' },
+        }),
+      );
+    });
+  });
+
   it('includes required domestic and platform provider presets', async () => {
     render(<Settings />);
     await screen.findByRole('heading', { name: '设置' });
