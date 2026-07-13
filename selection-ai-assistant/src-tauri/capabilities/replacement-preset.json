@@ -1,0 +1,14 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "replacement-preset-window",
+  "description": "替换与翻译输出目标预设窗口的最小权限。",
+  "windows": ["replacement-preset"],
+  "permissions": [
+    "allow-get-runtime-preferences",
+    "allow-save-output-target-preferences",
+    "allow-set-replacement-preset-panel-expanded",
+    "allow-focus-floating-button",
+    "core:event:allow-listen",
+    "core:event:allow-unlisten"
+  ]
+}

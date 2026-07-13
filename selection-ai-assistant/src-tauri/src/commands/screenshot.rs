@@ -1,9 +1,10 @@
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow};
 use tokio::time::{sleep, timeout, Duration};
 
 use crate::{
     ai::openai_compatible::{AiClientError, OpenAiCompatibleClient},
     app_state::AppState,
+    commands::access::require_webview_label,
     config::{AiProviderConfig, AiProviderKind},
     floating_window::positioning::{ScreenBounds, WindowSize},
     types::{Point, PublicError, Rect},
@@ -78,16 +79,22 @@ pub fn show_screenshot_overlay_for_point(
 }
 
 #[tauri::command]
-pub fn cancel_screenshot_translate(app: AppHandle) -> Result<(), PublicError> {
+pub fn cancel_screenshot_translate(
+    webview: WebviewWindow,
+    app: AppHandle,
+) -> Result<(), PublicError> {
+    require_webview_label(&webview, &[SCREENSHOT_OVERLAY_LABEL])?;
     hide_screenshot_overlay(&app)
 }
 
 #[tauri::command]
 pub async fn run_screenshot_translate(
+    webview: WebviewWindow,
     app: AppHandle,
     state: State<'_, AppState>,
     request: RunScreenshotTranslateRequest,
 ) -> Result<RunScreenshotTranslateResponse, PublicError> {
+    require_webview_label(&webview, &[SCREENSHOT_OVERLAY_LABEL])?;
     let rect = normalized_rect(request.rect).ok_or_else(|| {
         command_error(
             "screenshot_rect_too_small",

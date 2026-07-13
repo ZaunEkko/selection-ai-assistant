@@ -1,4 +1,4 @@
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, State, WebviewWindow};
 use tokio::time::{timeout, Duration};
 
 use crate::ai::action_classifier::AiAction;
@@ -6,6 +6,7 @@ use crate::ai::anthropic::AnthropicClient;
 use crate::ai::gemini::GeminiClient;
 use crate::ai::openai_compatible::{AiClientError, ChatMessage, OpenAiCompatibleClient};
 use crate::app_state::AppState;
+use crate::commands::access::require_webview_label;
 use crate::config::{AiProviderConfig, AiProviderKind, ProviderUpdate};
 use crate::types::PublicError;
 
@@ -313,10 +314,12 @@ fn default_provider_with_api_key(
 
 #[tauri::command]
 pub async fn run_ai_action(
+    webview: WebviewWindow,
     app: AppHandle,
     state: State<'_, AppState>,
     request: RunAiActionRequest,
 ) -> Result<RunAiActionResponse, PublicError> {
+    require_webview_label(&webview, &["ai-panel", "floating-button"])?;
     if request.text.trim().is_empty() {
         return Err(PublicError {
             code: "selection_text_required".to_string(),
@@ -380,10 +383,12 @@ pub async fn run_ai_action(
 
 #[tauri::command]
 pub async fn run_ai_follow_up(
+    webview: WebviewWindow,
     app: AppHandle,
     state: State<'_, AppState>,
     request: RunAiFollowUpRequest,
 ) -> Result<RunAiActionResponse, PublicError> {
+    require_webview_label(&webview, &["ai-panel"])?;
     if request.request_id.trim().is_empty() {
         return Err(PublicError {
             code: "request_id_required".to_string(),
@@ -463,9 +468,11 @@ pub struct TestProviderConnectionResponse {
 
 #[tauri::command]
 pub async fn list_provider_models(
+    webview: WebviewWindow,
     state: State<'_, AppState>,
     provider: ProviderUpdate,
 ) -> Result<Vec<String>, PublicError> {
+    require_webview_label(&webview, &["main"])?;
     list_provider_models_for_update(&state, provider).await
 }
 
@@ -488,9 +495,11 @@ pub async fn list_provider_models_for_provider(
 
 #[tauri::command]
 pub async fn test_provider_connection(
+    webview: WebviewWindow,
     state: State<'_, AppState>,
     provider: ProviderUpdate,
 ) -> Result<TestProviderConnectionResponse, PublicError> {
+    require_webview_label(&webview, &["main"])?;
     test_provider_connection_for_update(&state, provider).await
 }
 

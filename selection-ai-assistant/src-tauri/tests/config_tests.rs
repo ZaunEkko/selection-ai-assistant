@@ -1,3 +1,5 @@
+use std::collections::{BTreeMap, BTreeSet};
+
 use selection_ai_assistant_lib::config::{
     AiProviderKind, AppConfig, CloseButtonBehavior, ReplacementTargetLanguage,
 };
@@ -47,24 +49,194 @@ fn all_windows_binaries_use_gui_subsystem_to_avoid_console_window() {
 }
 
 #[test]
-fn overlay_windows_have_tauri_capability_permissions() {
-    let capabilities_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("capabilities")
-        .join("default.json");
-    let capabilities: serde_json::Value = serde_json::from_str(
-        &std::fs::read_to_string(capabilities_path).expect("capabilities file should load"),
-    )
-    .expect("capabilities file should be valid json");
-    let windows = capabilities["windows"]
-        .as_array()
-        .expect("capability windows should be an array");
+fn app_manifest_commands_match_invoke_handler_commands() {
+    let crate_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let build_rs =
+        std::fs::read_to_string(crate_root.join("build.rs")).expect("build.rs should load");
+    let lib_rs =
+        std::fs::read_to_string(crate_root.join("src").join("lib.rs")).expect("lib.rs should load");
 
-    for label in ["source-text", "translate-result", "screenshot-overlay"] {
+    let manifest_commands: BTreeSet<_> = build_rs
+        .lines()
+        .filter_map(|line| {
+            let line = line.trim();
+            let command = line.strip_prefix('"')?.split('"').next()?;
+            Some(command.to_string())
+        })
+        .collect();
+    let handler_commands: BTreeSet<_> = lib_rs
+        .split("tauri::generate_handler![")
+        .nth(1)
+        .expect("invoke handler should exist")
+        .split("])")
+        .next()
+        .expect("invoke handler should close")
+        .lines()
+        .filter_map(|line| {
+            let line = line.trim().trim_end_matches(',');
+            (!line.is_empty()).then(|| line.rsplit("::").next().unwrap().to_string())
+        })
+        .collect();
+
+    assert_eq!(manifest_commands, handler_commands);
+}
+
+#[test]
+fn each_window_has_an_exact_minimum_capability() {
+    let expected: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::from([
+        (
+            "main",
+            BTreeSet::from([
+                "allow-get-config",
+                "allow-get-platform-capabilities",
+                "allow-save-provider-config",
+                "allow-set-default-provider",
+                "allow-delete-provider",
+                "allow-save-app-behavior-config",
+                "allow-confirm-main-window-close",
+                "allow-list-provider-models",
+                "allow-test-provider-connection",
+                "core:event:allow-listen",
+                "core:event:allow-unlisten",
+            ]),
+        ),
+        (
+            "floating-button",
+            BTreeSet::from([
+                "allow-get-runtime-preferences",
+                "allow-get-latest-panel-context",
+                "allow-run-ai-action",
+                "allow-replace-selected-text",
+                "allow-open-panel-for-current-selection",
+                "allow-show-replacement-preset-panel",
+                "allow-hide-replacement-preset-panel",
+                "allow-show-translate-result",
+                "core:event:allow-listen",
+                "core:event:allow-unlisten",
+                "core:event:allow-emit",
+            ]),
+        ),
+        (
+            "replacement-preset",
+            BTreeSet::from([
+                "allow-get-runtime-preferences",
+                "allow-save-output-target-preferences",
+                "allow-set-replacement-preset-panel-expanded",
+                "allow-focus-floating-button",
+                "core:event:allow-listen",
+                "core:event:allow-unlisten",
+            ]),
+        ),
+        (
+            "ai-panel",
+            BTreeSet::from([
+                "allow-get-latest-panel-context",
+                "allow-run-ai-action",
+                "allow-run-ai-follow-up",
+                "allow-show-source-text-window",
+                "allow-hide-source-text-window",
+                "allow-hide-ai-panel",
+                "core:event:allow-listen",
+                "core:event:allow-unlisten",
+                "core:window:allow-start-dragging",
+            ]),
+        ),
+        (
+            "source-text",
+            BTreeSet::from([
+                "allow-get-latest-source-text-context",
+                "allow-hide-source-text-window",
+                "core:event:allow-listen",
+                "core:event:allow-unlisten",
+                "core:window:allow-start-dragging",
+            ]),
+        ),
+        (
+            "translate-result",
+            BTreeSet::from([
+                "allow-hide-translate-result",
+                "core:event:allow-listen",
+                "core:event:allow-unlisten",
+                "core:window:allow-start-dragging",
+                "core:window:allow-start-resize-dragging",
+            ]),
+        ),
+        (
+            "screenshot-overlay",
+            BTreeSet::from([
+                "allow-get-runtime-preferences",
+                "allow-cancel-screenshot-translate",
+                "allow-run-screenshot-translate",
+            ]),
+        ),
+    ]);
+    let forbidden = [
+        "core:default",
+        "core:event:default",
+        "core:window:default",
+        "opener:default",
+    ];
+    let capabilities_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("capabilities");
+    let mut actual = BTreeMap::<String, BTreeSet<String>>::new();
+
+    for entry in std::fs::read_dir(capabilities_dir).expect("capabilities directory should load") {
+        let entry = entry.expect("capability entry should load");
+        if entry.path().extension().and_then(|value| value.to_str()) != Some("json") {
+            continue;
+        }
+        let capability: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(entry.path()).expect("capability file should load"),
+        )
+        .expect("capability file should be valid json");
+        let windows = capability["windows"]
+            .as_array()
+            .expect("capability windows should be an array");
+        assert_eq!(
+            windows.len(),
+            1,
+            "each capability must be bound to exactly one window"
+        );
+        let window = windows[0]
+            .as_str()
+            .expect("capability window should be a string")
+            .to_string();
+        let permissions: BTreeSet<String> = capability["permissions"]
+            .as_array()
+            .expect("capability permissions should be an array")
+            .iter()
+            .map(|permission| {
+                permission
+                    .as_str()
+                    .expect("permission should be a string")
+                    .to_string()
+            })
+            .collect();
+        for permission in forbidden {
+            assert!(
+                !permissions.contains(permission),
+                "{window} must not use broad permission {permission}"
+            );
+        }
         assert!(
-            windows.iter().any(|window| window.as_str() == Some(label)),
-            "{label} window needs capability access to listen for events and invoke window commands"
+            actual.insert(window.clone(), permissions).is_none(),
+            "window {window} must have exactly one capability"
         );
     }
+
+    let expected: BTreeMap<String, BTreeSet<String>> = expected
+        .into_iter()
+        .map(|(window, permissions)| {
+            (
+                window.to_string(),
+                permissions.into_iter().map(str::to_string).collect(),
+            )
+        })
+        .collect();
+    assert_eq!(actual, expected);
+    assert!(
+        !actual["replacement-preset"].contains("allow-save-app-behavior-config"),
+        "the preset window must not receive full app behavior write access"
+    );
 }
 
 #[test]
