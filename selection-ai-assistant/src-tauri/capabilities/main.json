@@ -1,0 +1,19 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "main-window",
+  "description": "设置主窗口的最小命令与事件权限。",
+  "windows": ["main"],
+  "permissions": [
+    "allow-get-config",
+    "allow-get-platform-capabilities",
+    "allow-save-provider-config",
+    "allow-set-default-provider",
+    "allow-delete-provider",
+    "allow-save-app-behavior-config",
+    "allow-confirm-main-window-close",
+    "allow-list-provider-models",
+    "allow-test-provider-connection",
+    "core:event:allow-listen",
+    "core:event:allow-unlisten"
+  ]
+}

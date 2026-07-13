@@ -1,10 +1,14 @@
 use selection_ai_assistant_lib::app_state::AppState;
-use selection_ai_assistant_lib::commands::config::{
-    get_config_from_state, get_runtime_preferences_from_state, get_settings_config_from_state,
-    save_app_behavior_config_in_state, save_provider_config_in_state,
-    save_provider_update_in_state,
-};
 use selection_ai_assistant_lib::commands::selection::validate_replacement_text;
+use selection_ai_assistant_lib::commands::{
+    access::require_label,
+    config::{
+        get_config_from_state, get_runtime_preferences_from_state, get_settings_config_from_state,
+        save_app_behavior_config_in_state, save_output_target_preferences_in_state,
+        save_provider_config_in_state, save_provider_update_in_state,
+    },
+    panel::TargetPresetKind,
+};
 use selection_ai_assistant_lib::config::{
     AiProviderConfig, AiProviderKind, AppBehaviorConfig, AppConfig, CloseButtonBehavior,
     ProviderUpdate, ReplacementTargetLanguage, SecretUpdate,
@@ -257,6 +261,114 @@ fn save_app_behavior_config_persists_to_settings_file() {
         ReplacementTargetLanguage::Custom
     );
     assert_eq!(loaded.translation_custom_target, "象形文字");
+}
+
+#[test]
+fn command_window_guard_accepts_only_expected_labels() {
+    assert!(require_label("main", &["main"]).is_ok());
+    assert!(require_label("ai-panel", &["floating-button", "ai-panel"]).is_ok());
+
+    let err = require_label("screenshot-overlay", &["main"])
+        .expect_err("unexpected window should be rejected");
+    assert_eq!(err.code, "command_window_unauthorized");
+    assert!(err.message.contains("screenshot-overlay"));
+}
+
+#[test]
+fn save_output_target_preferences_updates_only_requested_target() {
+    let initial = AppConfig {
+        replacement_target_language: ReplacementTargetLanguage::Korean,
+        replacement_custom_target: "韩语敬语".to_string(),
+        translation_target_language: ReplacementTargetLanguage::English,
+        translation_custom_target: "keep translation custom".to_string(),
+        ..AppConfig::default()
+    };
+    let state = AppState::new(initial);
+
+    let replacement = save_output_target_preferences_in_state(
+        &state,
+        TargetPresetKind::Replacement,
+        ReplacementTargetLanguage::Japanese,
+        "日文自然口语".to_string(),
+    )
+    .expect("replacement target should save");
+    assert_eq!(
+        replacement.replacement_target_language,
+        ReplacementTargetLanguage::Japanese
+    );
+    assert_eq!(replacement.replacement_custom_target, "日文自然口语");
+    assert_eq!(
+        replacement.translation_target_language,
+        ReplacementTargetLanguage::English
+    );
+    assert_eq!(
+        replacement.translation_custom_target,
+        "keep translation custom"
+    );
+
+    let translation = save_output_target_preferences_in_state(
+        &state,
+        TargetPresetKind::Translation,
+        ReplacementTargetLanguage::MorseCode,
+        "摩斯密码".to_string(),
+    )
+    .expect("translation target should save");
+    assert_eq!(
+        translation.replacement_target_language,
+        ReplacementTargetLanguage::Japanese
+    );
+    assert_eq!(translation.replacement_custom_target, "日文自然口语");
+    assert_eq!(
+        translation.translation_target_language,
+        ReplacementTargetLanguage::MorseCode
+    );
+    assert_eq!(translation.translation_custom_target, "摩斯密码");
+}
+
+#[test]
+fn save_output_target_preferences_rejects_empty_custom_target() {
+    let state = AppState::new(AppConfig::default());
+
+    let err = save_output_target_preferences_in_state(
+        &state,
+        TargetPresetKind::Replacement,
+        ReplacementTargetLanguage::Custom,
+        "   ".to_string(),
+    )
+    .expect_err("empty custom output target should fail");
+
+    assert_eq!(err.code, "output_target_required");
+    let stored = get_config_from_state(&state).expect("config should remain readable");
+    assert_eq!(
+        stored.replacement_target_language,
+        ReplacementTargetLanguage::Auto
+    );
+}
+
+#[test]
+fn save_output_target_preferences_persists_to_settings_file() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let path = dir.path().join("settings.json");
+    let state = AppState::new_with_settings_path(AppConfig::default(), path.clone());
+
+    save_output_target_preferences_in_state(
+        &state,
+        TargetPresetKind::Translation,
+        ReplacementTargetLanguage::Custom,
+        "象形文字风格".to_string(),
+    )
+    .expect("output target should persist");
+
+    let loaded = AppConfig::load_from_path(&path).expect("settings should load from disk");
+    assert_eq!(
+        loaded.translation_target_language,
+        ReplacementTargetLanguage::Custom
+    );
+    assert_eq!(loaded.translation_custom_target, "象形文字风格");
+    assert_eq!(
+        loaded.replacement_target_language,
+        ReplacementTargetLanguage::Auto
+    );
 }
 
 #[test]

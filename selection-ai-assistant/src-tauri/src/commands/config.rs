@@ -1,25 +1,40 @@
 use std::path::Path;
 
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, State, WebviewWindow};
 use tauri_plugin_autostart::ManagerExt;
 
 use crate::app_lifecycle;
 use crate::app_state::AppState;
+use crate::commands::access::require_webview_label;
+use crate::commands::panel::TargetPresetKind;
 use crate::config::{
     AiProviderConfig, AppBehaviorConfig, AppConfig, CloseButtonBehavior, ProviderUpdate,
-    RuntimePreferences, SettingsConfigView,
+    ReplacementTargetLanguage, RuntimePreferences, SettingsConfigView,
 };
 use crate::types::PublicError;
 
 #[tauri::command]
-pub fn get_config(state: State<'_, AppState>) -> Result<SettingsConfigView, PublicError> {
+pub fn get_config(
+    webview: WebviewWindow,
+    state: State<'_, AppState>,
+) -> Result<SettingsConfigView, PublicError> {
+    require_webview_label(&webview, &["main"])?;
     get_settings_config_from_state(&state)
 }
 
 #[tauri::command]
 pub fn get_runtime_preferences(
+    webview: WebviewWindow,
     state: State<'_, AppState>,
 ) -> Result<RuntimePreferences, PublicError> {
+    require_webview_label(
+        &webview,
+        &[
+            "floating-button",
+            "replacement-preset",
+            "screenshot-overlay",
+        ],
+    )?;
     get_runtime_preferences_from_state(&state)
 }
 
@@ -51,10 +66,12 @@ pub fn get_runtime_preferences_from_state(
 
 #[tauri::command]
 pub fn save_app_behavior_config(
+    webview: WebviewWindow,
     app: AppHandle,
     state: State<'_, AppState>,
     preferences: AppBehaviorConfig,
 ) -> Result<RuntimePreferences, PublicError> {
+    require_webview_label(&webview, &["main"])?;
     sync_launch_at_startup(&app, preferences.launch_at_startup)?;
     let config = save_app_behavior_config_in_state(&state, preferences)?;
     Ok(RuntimePreferences::from(&config))
@@ -114,11 +131,59 @@ pub fn save_app_behavior_config_in_state(
 }
 
 #[tauri::command]
+pub fn save_output_target_preferences(
+    webview: WebviewWindow,
+    state: State<'_, AppState>,
+    kind: TargetPresetKind,
+    target_language: ReplacementTargetLanguage,
+    custom_target: String,
+) -> Result<RuntimePreferences, PublicError> {
+    require_webview_label(&webview, &["replacement-preset"])?;
+    let config =
+        save_output_target_preferences_in_state(&state, kind, target_language, custom_target)?;
+    Ok(RuntimePreferences::from(&config))
+}
+
+pub fn save_output_target_preferences_in_state(
+    state: &AppState,
+    kind: TargetPresetKind,
+    target_language: ReplacementTargetLanguage,
+    custom_target: String,
+) -> Result<AppConfig, PublicError> {
+    let custom_target = custom_target.trim().to_string();
+    if target_language == ReplacementTargetLanguage::Custom && custom_target.is_empty() {
+        return Err(PublicError {
+            code: "output_target_required".to_string(),
+            message: "自定义输出目标不能为空。".to_string(),
+        });
+    }
+
+    let mut config = state.config.lock().map_err(config_lock_error)?;
+    let mut candidate = config.clone();
+    match kind {
+        TargetPresetKind::Replacement => {
+            candidate.replacement_target_language = target_language;
+            candidate.replacement_custom_target = custom_target;
+        }
+        TargetPresetKind::Translation => {
+            candidate.translation_target_language = target_language;
+            candidate.translation_custom_target = custom_target;
+        }
+    }
+
+    persist_candidate(state.settings_path.as_deref(), &candidate)?;
+    *config = candidate.clone();
+    Ok(candidate)
+}
+
+#[tauri::command]
 pub fn confirm_main_window_close(
+    webview: WebviewWindow,
     app: AppHandle,
     state: State<'_, AppState>,
     behavior: CloseButtonBehavior,
 ) -> Result<RuntimePreferences, PublicError> {
+    require_webview_label(&webview, &["main"])?;
     let current = get_config_from_state(&state)?;
     let config = save_app_behavior_config_in_state(
         &state,
@@ -144,9 +209,11 @@ pub fn confirm_main_window_close(
 
 #[tauri::command]
 pub fn save_provider_config(
+    webview: WebviewWindow,
     state: State<'_, AppState>,
     provider: ProviderUpdate,
 ) -> Result<SettingsConfigView, PublicError> {
+    require_webview_label(&webview, &["main"])?;
     let config = save_provider_update_in_state(&state, provider)?;
     Ok(SettingsConfigView::from(&config))
 }
@@ -226,9 +293,11 @@ fn validate_provider(provider: &AiProviderConfig) -> Result<(), PublicError> {
 
 #[tauri::command]
 pub fn set_default_provider(
+    webview: WebviewWindow,
     state: State<'_, AppState>,
     provider_id: String,
 ) -> Result<SettingsConfigView, PublicError> {
+    require_webview_label(&webview, &["main"])?;
     let mut config = state.config.lock().map_err(config_lock_error)?;
 
     if !config.providers.iter().any(|p| p.id == provider_id) {
@@ -248,9 +317,11 @@ pub fn set_default_provider(
 
 #[tauri::command]
 pub fn delete_provider(
+    webview: WebviewWindow,
     state: State<'_, AppState>,
     provider_id: String,
 ) -> Result<SettingsConfigView, PublicError> {
+    require_webview_label(&webview, &["main"])?;
     let mut config = state.config.lock().map_err(config_lock_error)?;
 
     let mut candidate = config.clone();

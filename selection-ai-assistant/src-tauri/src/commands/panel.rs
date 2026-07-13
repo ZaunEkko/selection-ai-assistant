@@ -1,6 +1,7 @@
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow};
 
 use crate::app_state::AppState;
+use crate::commands::access::require_webview_label;
 
 use crate::floating_window::positioning::{
     place_near_anchor, place_source_left_of_panel, place_toolbar_above_anchor,
@@ -357,16 +358,18 @@ pub fn hide_floating_button(app: AppHandle) -> Result<(), PublicError> {
     } else {
         Ok(())
     };
-    let preset_result = hide_replacement_preset_panel(app);
+    let preset_result = hide_replacement_preset_panel_for_app(app);
     floating_result?;
     preset_result
 }
 
 #[tauri::command]
 pub fn show_replacement_preset_panel(
+    webview: WebviewWindow,
     app: AppHandle,
     kind: TargetPresetKind,
 ) -> Result<(), PublicError> {
+    require_webview_label(&webview, &["floating-button"])?;
     let floating = app
         .get_webview_window("floating-button")
         .ok_or_else(|| PublicError {
@@ -405,9 +408,11 @@ pub fn show_replacement_preset_panel(
 
 #[tauri::command]
 pub fn set_replacement_preset_panel_expanded(
+    webview: WebviewWindow,
     app: AppHandle,
     expanded: bool,
 ) -> Result<(), PublicError> {
+    require_webview_label(&webview, &["replacement-preset"])?;
     let window = app
         .get_webview_window("replacement-preset")
         .ok_or_else(|| PublicError {
@@ -431,7 +436,8 @@ pub fn set_replacement_preset_panel_expanded(
 }
 
 #[tauri::command]
-pub fn focus_floating_button(app: AppHandle) -> Result<(), PublicError> {
+pub fn focus_floating_button(webview: WebviewWindow, app: AppHandle) -> Result<(), PublicError> {
+    require_webview_label(&webview, &["replacement-preset"])?;
     if let Some(window) = app.get_webview_window("floating-button") {
         window
             .set_focus()
@@ -441,7 +447,15 @@ pub fn focus_floating_button(app: AppHandle) -> Result<(), PublicError> {
 }
 
 #[tauri::command]
-pub fn hide_replacement_preset_panel(app: AppHandle) -> Result<(), PublicError> {
+pub fn hide_replacement_preset_panel(
+    webview: WebviewWindow,
+    app: AppHandle,
+) -> Result<(), PublicError> {
+    require_webview_label(&webview, &["floating-button"])?;
+    hide_replacement_preset_panel_for_app(app)
+}
+
+pub fn hide_replacement_preset_panel_for_app(app: AppHandle) -> Result<(), PublicError> {
     #[cfg(debug_assertions)]
     eprintln!("[panel] hide_replacement_preset_panel");
     let hide_result = if let Some(window) = app.get_webview_window("replacement-preset") {
@@ -477,7 +491,8 @@ pub fn show_ai_panel(app: AppHandle, position: Point) -> Result<(), PublicError>
 }
 
 #[tauri::command]
-pub fn hide_ai_panel(app: AppHandle) -> Result<(), PublicError> {
+pub fn hide_ai_panel(webview: WebviewWindow, app: AppHandle) -> Result<(), PublicError> {
+    require_webview_label(&webview, &["ai-panel"])?;
     let assistant_rects = assistant_window_rects(&app);
     crate::input_monitor::notify_ai_panel_closed_by_user(assistant_rects);
     if let Some(window) = app.get_webview_window("ai-panel") {
@@ -485,12 +500,17 @@ pub fn hide_ai_panel(app: AppHandle) -> Result<(), PublicError> {
             .hide()
             .map_err(|err| command_error("hide_failed", err))?;
     }
-    hide_source_text_window(app)?;
+    hide_source_text_window_for_app(app)?;
     Ok(())
 }
 
 #[tauri::command]
-pub fn show_source_text_window(app: AppHandle, text: String) -> Result<(), PublicError> {
+pub fn show_source_text_window(
+    webview: WebviewWindow,
+    app: AppHandle,
+    text: String,
+) -> Result<(), PublicError> {
+    require_webview_label(&webview, &["ai-panel"])?;
     let text = text.trim();
     if text.is_empty() {
         return Err(PublicError {
@@ -530,14 +550,23 @@ pub fn show_source_text_window(app: AppHandle, text: String) -> Result<(), Publi
 }
 
 #[tauri::command]
-pub fn get_latest_source_text_context(state: State<AppState>) -> Option<SourceTextContext> {
-    state
+pub fn get_latest_source_text_context(
+    webview: WebviewWindow,
+    state: State<AppState>,
+) -> Result<Option<SourceTextContext>, PublicError> {
+    require_webview_label(&webview, &["source-text"])?;
+    Ok(state
         .latest_source_text()
-        .map(|text| SourceTextContext { text })
+        .map(|text| SourceTextContext { text }))
 }
 
 #[tauri::command]
-pub fn hide_source_text_window(app: AppHandle) -> Result<(), PublicError> {
+pub fn hide_source_text_window(webview: WebviewWindow, app: AppHandle) -> Result<(), PublicError> {
+    require_webview_label(&webview, &["ai-panel", "source-text"])?;
+    hide_source_text_window_for_app(app)
+}
+
+fn hide_source_text_window_for_app(app: AppHandle) -> Result<(), PublicError> {
     if let Some(window) = app.get_webview_window("source-text") {
         window
             .hide()
@@ -551,12 +580,14 @@ pub fn hide_source_text_window(app: AppHandle) -> Result<(), PublicError> {
 
 #[tauri::command]
 pub fn show_translate_result(
+    webview: WebviewWindow,
     app: AppHandle,
     position: Point,
     original_text: String,
     translated_text: String,
     selection_rects: Vec<Rect>,
 ) -> Result<(), PublicError> {
+    require_webview_label(&webview, &["floating-button"])?;
     let window = app
         .get_webview_window("translate-result")
         .ok_or_else(|| PublicError {
@@ -590,7 +621,8 @@ pub fn show_translate_result(
 }
 
 #[tauri::command]
-pub fn hide_translate_result(app: AppHandle) -> Result<(), PublicError> {
+pub fn hide_translate_result(webview: WebviewWindow, app: AppHandle) -> Result<(), PublicError> {
+    require_webview_label(&webview, &["translate-result"])?;
     if let Some(window) = app.get_webview_window("translate-result") {
         window
             .hide()

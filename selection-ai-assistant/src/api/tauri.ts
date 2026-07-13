@@ -117,6 +117,14 @@ export function saveAppBehaviorConfig(preferences: AppBehaviorConfig): Promise<R
   return invoke<RuntimePreferences>('save_app_behavior_config', { preferences });
 }
 
+export function saveOutputTargetPreferences(
+  kind: TargetPresetKind,
+  targetLanguage: OutputTargetPreset,
+  customTarget: string,
+): Promise<RuntimePreferences> {
+  return invoke<RuntimePreferences>('save_output_target_preferences', { kind, targetLanguage, customTarget });
+}
+
 export function confirmMainWindowClose(behavior: CloseButtonBehavior): Promise<RuntimePreferences> {
   return invoke<RuntimePreferences>('confirm_main_window_close', { behavior });
 }

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-cancel-screenshot-translate"
+description = "Enables the cancel_screenshot_translate command without any pre-configured scope."
+commands.allow = ["cancel_screenshot_translate"]
+
+[[permission]]
+identifier = "deny-cancel-screenshot-translate"
+description = "Denies the cancel_screenshot_translate command without any pre-configured scope."
+commands.deny = ["cancel_screenshot_translate"]

@@ -1,0 +1,19 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "floating-button-window",
+  "description": "迷你操作条的选区、AI、翻译结果与预设面板权限。",
+  "windows": ["floating-button"],
+  "permissions": [
+    "allow-get-runtime-preferences",
+    "allow-get-latest-panel-context",
+    "allow-run-ai-action",
+    "allow-replace-selected-text",
+    "allow-open-panel-for-current-selection",
+    "allow-show-replacement-preset-panel",
+    "allow-hide-replacement-preset-panel",
+    "allow-show-translate-result",
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "core:event:allow-emit"
+  ]
+}

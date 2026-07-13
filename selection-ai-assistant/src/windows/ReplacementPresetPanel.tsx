@@ -4,7 +4,7 @@ import {
   focusFloatingButton,
   formatCommandError,
   getRuntimePreferences,
-  saveAppBehaviorConfig,
+  saveOutputTargetPreferences,
   setReplacementPresetPanelExpanded,
   type AppBehaviorConfig,
   type OutputTargetPreset,
@@ -201,7 +201,11 @@ export function ReplacementPresetPanel() {
     setAppBehavior(preferences);
 
     try {
-      const next = await saveAppBehaviorConfig(preferences);
+      const next = await saveOutputTargetPreferences(
+        kind,
+        targetLanguage,
+        targetLanguage === 'custom' ? normalizedCustomTarget : selectedCustomTarget(appBehavior, kind),
+      );
       const nextBehavior = appBehaviorFromConfig(next);
       setAppBehavior(nextBehavior);
       setCustomTargetDraft(selectedCustomTarget(nextBehavior, kind));

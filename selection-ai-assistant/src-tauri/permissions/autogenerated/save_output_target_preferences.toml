@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-save-output-target-preferences"
+description = "Enables the save_output_target_preferences command without any pre-configured scope."
+commands.allow = ["save_output_target_preferences"]
+
+[[permission]]
+identifier = "deny-save-output-target-preferences"
+description = "Denies the save_output_target_preferences command without any pre-configured scope."
+commands.deny = ["save_output_target_preferences"]

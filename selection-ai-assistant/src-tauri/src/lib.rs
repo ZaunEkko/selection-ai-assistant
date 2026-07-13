@@ -25,6 +25,7 @@ pub fn run() {
             commands::config::get_config,
             commands::config::get_runtime_preferences,
             commands::config::save_app_behavior_config,
+            commands::config::save_output_target_preferences,
             commands::config::confirm_main_window_close,
             commands::config::save_provider_config,
             commands::config::set_default_provider,
