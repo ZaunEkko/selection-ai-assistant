@@ -35,15 +35,19 @@ fn save_app_behavior_config_updates_startup_and_close_preferences() {
         &state,
         AppBehaviorConfig {
             hotkey: "Ctrl+Alt+T".to_string(),
+            launch_at_startup: true,
             start_minimized_to_tray: true,
             close_button_behavior: CloseButtonBehavior::ExitApp,
             replacement_target_language: ReplacementTargetLanguage::Korean,
             replacement_custom_target: "韩语敬语".to_string(),
+            translation_target_language: ReplacementTargetLanguage::MorseCode,
+            translation_custom_target: "甲骨文风格".to_string(),
         },
     )
     .expect("app behavior config should save");
 
     assert_eq!(config.hotkey, "Ctrl+Alt+T");
+    assert!(config.launch_at_startup);
     assert!(config.start_minimized_to_tray);
     assert_eq!(config.close_button_behavior, CloseButtonBehavior::ExitApp);
     assert_eq!(
@@ -51,9 +55,15 @@ fn save_app_behavior_config_updates_startup_and_close_preferences() {
         ReplacementTargetLanguage::Korean
     );
     assert_eq!(config.replacement_custom_target, "韩语敬语");
+    assert_eq!(
+        config.translation_target_language,
+        ReplacementTargetLanguage::MorseCode
+    );
+    assert_eq!(config.translation_custom_target, "甲骨文风格");
 
     let stored = get_config_from_state(&state).expect("config should be readable");
     assert_eq!(stored.hotkey, "Ctrl+Alt+T");
+    assert!(stored.launch_at_startup);
     assert!(stored.start_minimized_to_tray);
     assert_eq!(stored.close_button_behavior, CloseButtonBehavior::ExitApp);
     assert_eq!(
@@ -61,6 +71,11 @@ fn save_app_behavior_config_updates_startup_and_close_preferences() {
         ReplacementTargetLanguage::Korean
     );
     assert_eq!(stored.replacement_custom_target, "韩语敬语");
+    assert_eq!(
+        stored.translation_target_language,
+        ReplacementTargetLanguage::MorseCode
+    );
+    assert_eq!(stored.translation_custom_target, "甲骨文风格");
 }
 
 #[test]
@@ -73,16 +88,20 @@ fn save_app_behavior_config_persists_to_settings_file() {
         &state,
         AppBehaviorConfig {
             hotkey: "Ctrl+Alt+K".to_string(),
+            launch_at_startup: true,
             start_minimized_to_tray: true,
             close_button_behavior: CloseButtonBehavior::MinimizeToTray,
             replacement_target_language: ReplacementTargetLanguage::Custom,
             replacement_custom_target: "日文自然口语".to_string(),
+            translation_target_language: ReplacementTargetLanguage::Custom,
+            translation_custom_target: "象形文字".to_string(),
         },
     )
     .expect("app behavior config should save");
 
     let loaded = AppConfig::load_from_path(&path).expect("settings should load from disk");
     assert_eq!(loaded.hotkey, "Ctrl+Alt+K");
+    assert!(loaded.launch_at_startup);
     assert!(loaded.start_minimized_to_tray);
     assert_eq!(
         loaded.close_button_behavior,
@@ -93,6 +112,11 @@ fn save_app_behavior_config_persists_to_settings_file() {
         ReplacementTargetLanguage::Custom
     );
     assert_eq!(loaded.replacement_custom_target, "日文自然口语");
+    assert_eq!(
+        loaded.translation_target_language,
+        ReplacementTargetLanguage::Custom
+    );
+    assert_eq!(loaded.translation_custom_target, "象形文字");
 }
 
 #[test]

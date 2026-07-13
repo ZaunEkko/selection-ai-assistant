@@ -78,6 +78,7 @@ const config: AppConfig = {
   candidateTimeoutMs: 4000,
   minDragDistance: 6,
   hotkey: 'Ctrl+Alt+A',
+  launchAtStartup: false,
   clipboardFallbackEnabled: true,
   showClipboardPrivacyWarningOnFirstUse: true,
   disableInElevatedWindows: true,
@@ -86,6 +87,8 @@ const config: AppConfig = {
   closeButtonBehavior: 'ask',
   replacementTargetLanguage: 'auto',
   replacementCustomTarget: '',
+  translationTargetLanguage: 'auto',
+  translationCustomTarget: '',
   disabledApps: ['1Password.exe', 'KeePassXC.exe', 'Bitwarden.exe', 'mstsc.exe', 'AnyDesk.exe', 'TeamViewer.exe'],
 };
 
@@ -168,10 +171,11 @@ describe('Settings', () => {
     expect(screen.getByText(/Wayland 默认限制更强/)).toBeInTheDocument();
   });
 
-  it('saves startup, close button behavior, and manual hotkey preferences', async () => {
+  it('saves startup, close button behavior, and screenshot hotkey preferences', async () => {
     const nextConfig: AppConfig = {
       ...config,
       hotkey: 'Ctrl+Alt+T',
+      launchAtStartup: true,
       startMinimizedToTray: true,
       closeButtonBehavior: 'exitApp',
     };
@@ -179,27 +183,32 @@ describe('Settings', () => {
     render(<Settings />);
     await screen.findByRole('heading', { name: '设置' });
 
+    fireEvent.click(screen.getByLabelText('开机自启'));
     fireEvent.click(screen.getByLabelText('启动时最小化到后台'));
     fireEvent.change(screen.getByLabelText('关闭按钮行为'), { target: { value: 'exitApp' } });
-    fireEvent.change(screen.getByLabelText('手动快捷键'), { target: { value: 'Ctrl+Alt+T' } });
-    fireEvent.click(screen.getByRole('button', { name: '保存启动、关闭与快捷键设置' }));
+    fireEvent.change(screen.getByLabelText('截图翻译快捷键'), { target: { value: 'Ctrl+Alt+T' } });
+    fireEvent.click(screen.getByRole('button', { name: '保存启动、后台与截图快捷键设置' }));
 
     expect(screen.getByRole('button', { name: '正在保存设置…' })).toBeDisabled();
-    expect(screen.getByRole('status')).toHaveTextContent('正在保存启动、关闭与快捷键设置…');
+    expect(screen.getByRole('status')).toHaveTextContent('正在保存启动、后台与截图快捷键设置…');
 
     await waitFor(() => {
       expect(saveAppBehaviorConfigMock).toHaveBeenCalledWith({
         hotkey: 'Ctrl+Alt+T',
+        launchAtStartup: true,
         startMinimizedToTray: true,
         closeButtonBehavior: 'exitApp',
         replacementTargetLanguage: 'auto',
         replacementCustomTarget: '',
+        translationTargetLanguage: 'auto',
+        translationCustomTarget: '',
       });
     });
-    expect(screen.getByLabelText('手动快捷键')).toHaveValue('Ctrl+Alt+T');
+    expect(screen.getByLabelText('截图翻译快捷键')).toHaveValue('Ctrl+Alt+T');
+    expect(screen.getByLabelText('开机自启')).toBeChecked();
     expect(screen.getByLabelText('启动时最小化到后台')).toBeChecked();
     expect(screen.getByLabelText('关闭按钮行为')).toHaveValue('exitApp');
-    expect(screen.getByRole('status')).toHaveTextContent('已保存启动、关闭与快捷键设置。');
+    expect(screen.getByRole('status')).toHaveTextContent('已保存启动、后台与截图快捷键设置。');
   });
 
   it('prompts on the first main window close request and remembers the selected close behavior', async () => {

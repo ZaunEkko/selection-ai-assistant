@@ -8,10 +8,15 @@ use std::{
     time::{Duration, Instant},
 };
 
-use tauri::Manager;
+use base64::Engine;
+use tauri::{Emitter, Manager};
 use windows_sys::Win32::{
     Foundation::{CloseHandle, GlobalFree, BOOL, LPARAM, LRESULT, POINT, RECT as WinRect, WPARAM},
-    Graphics::Gdi::{GetPixel, GetWindowDC, ReleaseDC, HDC},
+    Graphics::Gdi::{
+        BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject, GetDC,
+        GetDIBits, GetPixel, GetWindowDC, ReleaseDC, SelectObject, BITMAPINFO, BITMAPINFOHEADER,
+        BI_RGB, DIB_RGB_COLORS, HDC, RGBQUAD, SRCCOPY,
+    },
     Security::{GetTokenInformation, TokenElevation, TOKEN_ELEVATION, TOKEN_QUERY},
     System::{
         DataExchange::{
@@ -45,19 +50,20 @@ use crate::{
     commands::{
         panel::{
             floating_button_position_for_selection, hide_floating_button,
-            show_floating_button_at_position, show_floating_button_for_selection,
+            hide_replacement_preset_panel, show_floating_button_at_position,
+            show_floating_button_for_selection,
         },
-        selection::{
-            create_panel_context_for_selection, emit_panel_context, open_panel_for_context,
-        },
+        screenshot::show_screenshot_overlay_for_point,
+        selection::{create_panel_context_for_selection, emit_panel_context},
     },
     config::AppConfig,
     input_monitor::events::{
         consume_pending_selection, handle_hotkey_state,
         hover_action_for_pending_selection_when_idle, manual_hotkey_trigger_key,
-        should_follow_scroll_for_source, visible_floating_button_action_when_idle, HotkeyAction,
-        HotkeyKeyState, MouseButtonEvent, PendingHotkeyAction, PendingSelection,
-        PendingSelectionHoverAction, VisibleFloatingButton, VisibleFloatingButtonAction,
+        selection_geometry_matches_drag_gesture, should_follow_scroll_for_source,
+        visible_floating_button_action_when_idle, HotkeyAction, HotkeyKeyState, MouseButtonEvent,
+        PendingHotkeyAction, PendingSelection, PendingSelectionHoverAction, VisibleFloatingButton,
+        VisibleFloatingButtonAction,
     },
     platform::{
         ClipboardBackend, InputMonitor, PermissionChecker, PlatformBackend, PlatformFeatureStatus,
@@ -72,12 +78,15 @@ use crate::{
             ClipboardRestoreStatus,
         },
         types::SelectionCandidate,
-        uia_reader::read_current_uia_selection_from_hwnd,
+        uia_reader::{
+            read_current_uia_selection_from_hwnd, read_current_uia_selection_from_hwnd_with_points,
+        },
     },
     types::{AppWindowInfo, Point, Rect},
 };
 
 const KEY_DOWN: i16 = 0x8000u16 as i16;
+const TARGET_CONTROLS_CLOSE_DELAY: Duration = Duration::from_millis(180);
 const CLIPBOARD_RESTORE_RETRY_COUNT: usize = 2;
 const CLIPBOARD_RESTORE_RETRY_DELAY: Duration = Duration::from_millis(30);
 const SCROLL_FOLLOW_RETRY_COUNT: usize = 2;
@@ -156,6 +165,7 @@ fn start(app: tauri::AppHandle) {
         let mut drag_start: Option<Point> = None;
         let mut pending_selection: Option<PendingSelection> = None;
         let mut visible_floating_button: Option<VisibleFloatingButton> = None;
+        let mut pointer_inside_target_controls = false;
         let mut pending_hotkey = PendingHotkeyAction::default();
         let monitor_started_at = Instant::now();
 
@@ -166,6 +176,7 @@ fn start(app: tauri::AppHandle) {
                     &mut drag_start,
                     &mut pending_selection,
                     &mut visible_floating_button,
+                    &mut pointer_inside_target_controls,
                     event,
                     elapsed_ms(monitor_started_at),
                 );
@@ -186,7 +197,11 @@ fn start(app: tauri::AppHandle) {
                     visible_floating_button = None;
                 }
                 HotkeyAction::CaptureAndOpen => {
-                    capture_store_and_open_panel(&app, cursor);
+                    if let Err(error) = show_screenshot_overlay_for_point(&app, cursor) {
+                        trace_selection_monitor(format_args!(
+                            "screenshot overlay failed after hotkey: {error:?}"
+                        ));
+                    }
                     consume_pending_selection(&mut pending_selection);
                     visible_floating_button = None;
                 }
@@ -199,6 +214,7 @@ fn start(app: tauri::AppHandle) {
                     &mut drag_start,
                     &mut pending_selection,
                     &mut visible_floating_button,
+                    &mut pointer_inside_target_controls,
                     event,
                     elapsed_ms(monitor_started_at),
                 ),
@@ -217,11 +233,105 @@ fn elapsed_ms(started_at: Instant) -> u64 {
         .unwrap_or(u64::MAX)
 }
 
+fn emit_floating_button_pointer_position(app: &tauri::AppHandle, position: Point) {
+    let Some(window) = app.get_webview_window("floating-button") else {
+        return;
+    };
+    if !window.is_visible().unwrap_or(false) {
+        return;
+    }
+    let Ok(window_position) = window.outer_position() else {
+        return;
+    };
+    let Ok(window_size) = window.outer_size() else {
+        return;
+    };
+    let rect = Rect {
+        x: window_position.x as f64,
+        y: window_position.y as f64,
+        width: window_size.width as f64,
+        height: window_size.height as f64,
+    };
+    if !crate::input_monitor::events::rect_contains(rect, position) {
+        return;
+    }
+
+    let _ = window.emit(
+        "floating_button_pointer_position",
+        serde_json::json!({
+            "x": position.x - rect.x,
+            "y": position.y - rect.y,
+            "width": rect.width,
+            "height": rect.height,
+        }),
+    );
+}
+
+fn update_target_controls_pointer_state(
+    app: &tauri::AppHandle,
+    position: Point,
+    was_inside: &mut bool,
+) {
+    let target_rects = target_control_window_rects(app);
+    let is_inside = target_rects
+        .iter()
+        .any(|rect| crate::input_monitor::events::rect_contains(*rect, position));
+    if is_inside == *was_inside {
+        return;
+    }
+    *was_inside = is_inside;
+
+    if is_inside
+        || !app
+            .get_webview_window("replacement-preset")
+            .and_then(|window| window.is_visible().ok())
+            .unwrap_or(false)
+    {
+        return;
+    }
+
+    let app = app.clone();
+    thread::spawn(move || {
+        thread::sleep(TARGET_CONTROLS_CLOSE_DELAY);
+        let Some(position) = cursor_point() else {
+            return;
+        };
+        let target_rects = target_control_window_rects(&app);
+        let is_inside = target_rects
+            .iter()
+            .any(|rect| crate::input_monitor::events::rect_contains(*rect, position));
+        if is_inside {
+            return;
+        }
+
+        let _ = hide_replacement_preset_panel(app);
+    });
+}
+
+fn target_control_window_rects(app: &tauri::AppHandle) -> Vec<Rect> {
+    ["floating-button", "replacement-preset"]
+        .into_iter()
+        .filter_map(|label| app.get_webview_window(label))
+        .filter(|window| window.is_visible().unwrap_or(false))
+        .filter_map(|window| {
+            let position = window.outer_position().ok()?;
+            let size = window.outer_size().ok()?;
+            Some(Rect {
+                x: position.x as f64,
+                y: position.y as f64,
+                width: size.width as f64,
+                height: size.height as f64,
+            })
+        })
+        .collect()
+}
+
 fn handle_mouse_event(
     app: &tauri::AppHandle,
     drag_start: &mut Option<Point>,
     pending_selection: &mut Option<PendingSelection>,
     visible_floating_button: &mut Option<VisibleFloatingButton>,
+    pointer_inside_target_controls: &mut bool,
     event: MouseButtonEvent,
     now_ms: u64,
 ) {
@@ -237,6 +347,8 @@ fn handle_mouse_event(
     }
 
     if let MouseButtonEvent::Move(position) = event {
+        emit_floating_button_pointer_position(app, position);
+        update_target_controls_pointer_state(app, position, pointer_inside_target_controls);
         let config = current_config(app).unwrap_or_default();
         match hover_action_for_pending_selection_when_idle(
             pending_selection,
@@ -301,11 +413,12 @@ fn handle_mouse_event(
                 );
 
                 // 检查是否在助手窗口内
-                let in_assistant_window = assistant_window_rects(app)
+                let assistant_rects = assistant_window_rects(app);
+                let in_assistant_window = assistant_rects
                     .iter()
                     .any(|window| crate::input_monitor::events::rect_contains(*window, up_point));
                 trace_selection_monitor(format_args!(
-                    "mouse up: down={down_point:?}, up={up_point:?}, min_drag_distance={min_drag_distance}, is_drag_met={is_drag_met}, in_assistant_window={in_assistant_window}"
+                    "mouse up: down={down_point:?}, up={up_point:?}, min_drag_distance={min_drag_distance}, is_drag_met={is_drag_met}, in_assistant_window={in_assistant_window}, assistant_rects={assistant_rects:?}"
                 ));
 
                 if is_drag_met && !in_assistant_window {
@@ -362,6 +475,21 @@ fn drag_selection_hint_rects(down_point: Point, up_point: Point) -> Vec<Rect> {
     }]
 }
 
+fn uia_probe_points_for_drag((down_point, up_point): (Point, Point)) -> Vec<Point> {
+    let point_at = |ratio: f64| Point {
+        x: down_point.x + (up_point.x - down_point.x) * ratio,
+        y: down_point.y + (up_point.y - down_point.y) * ratio,
+    };
+
+    vec![
+        down_point,
+        up_point,
+        point_at(0.25),
+        point_at(0.5),
+        point_at(0.75),
+    ]
+}
+
 fn should_use_selection_hint_rects(hint_rects: &[Rect]) -> bool {
     hint_rects.iter().any(is_valid_rect)
 }
@@ -386,6 +514,38 @@ struct RowMatch {
     count: i32,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct SelectionCaptureOptions {
+    drag_points: Option<(Point, Point)>,
+    require_drag_rect_match: bool,
+    allow_clipboard_fallback: bool,
+}
+
+#[derive(Debug)]
+struct SelectionCaptureResult {
+    context: crate::commands::selection::PanelContext,
+    source_window_handle: isize,
+    visual_selection: Option<SelectionVisualState>,
+}
+
+impl SelectionCaptureOptions {
+    fn from_mouse_drag(down_point: Point, up_point: Point) -> Self {
+        Self {
+            drag_points: Some((down_point, up_point)),
+            require_drag_rect_match: true,
+            allow_clipboard_fallback: false,
+        }
+    }
+
+    fn from_explicit_hotkey() -> Self {
+        Self {
+            drag_points: None,
+            require_drag_rect_match: false,
+            allow_clipboard_fallback: true,
+        }
+    }
+}
+
 fn visual_selection_from_drag(
     source_window_handle: isize,
     down_point: Point,
@@ -403,7 +563,8 @@ fn visual_selection_from_drag(
         y: (down_point.y + up_point.y) / 2.0,
     };
     let points = [down_point, up_point, mid_point];
-    let color = sample_selection_color(hdc, window_rect, &points);
+    let color = sample_selection_color(hdc, window_rect, &points)
+        .filter(selection_color_looks_like_highlight);
     let rect = color.and_then(|color| {
         let search_rect = drag_visual_search_rect(window_rect, down_point, up_point)?;
         find_visual_selection_rect_in_dc(
@@ -673,6 +834,14 @@ fn pixel_rgb(hdc: HDC, window_rect: Rect, screen_x: i32, screen_y: i32) -> Optio
     ))
 }
 
+fn selection_color_looks_like_highlight(color: &(u8, u8, u8)) -> bool {
+    let (red, green, blue) = *color;
+    let brightness = red as u16 + green as u16 + blue as u16;
+    let strongest_gap = red.max(green).max(blue) - red.min(green).min(blue);
+
+    brightness > 90 && brightness < 700 && strongest_gap >= 24
+}
+
 fn colors_are_close(a: (u8, u8, u8), b: (u8, u8, u8)) -> bool {
     let red = a.0.abs_diff(b.0) as u16;
     let green = a.1.abs_diff(b.1) as u16;
@@ -770,16 +939,22 @@ fn capture_store_and_show_floating_button(
         }
     };
 
-    let (context, source_window_handle) = match read_current_selection_context(anchor, &config) {
+    let options = drag_points
+        .map(|(down_point, up_point)| {
+            SelectionCaptureOptions::from_mouse_drag(down_point, up_point)
+        })
+        .unwrap_or_else(SelectionCaptureOptions::from_explicit_hotkey);
+    let SelectionCaptureResult {
+        context,
+        source_window_handle,
+        visual_selection,
+    } = match read_current_selection_context(anchor, &config, options) {
         Some(result) => result,
         None => {
             trace_selection_monitor(format_args!("capture failed: no selection context"));
             return None;
         }
     };
-    let visual_selection = drag_points.and_then(|(down_point, up_point)| {
-        visual_selection_from_drag(source_window_handle, down_point, up_point)
-    });
     let uses_visual_selection = visual_selection.is_some();
     let uses_selection_hint =
         !uses_visual_selection && should_use_selection_hint_rects(selection_hint_rects);
@@ -872,27 +1047,6 @@ fn floating_button_window_position(app: &tauri::AppHandle) -> Option<Point> {
         x: position.x as f64,
         y: position.y as f64,
     })
-}
-
-fn capture_store_and_open_panel(app: &tauri::AppHandle, fallback_point: Point) {
-    let Some(config) = current_config(app) else {
-        clear_selection_and_hide_button(app);
-        return;
-    };
-
-    if let Some((context, source_window_handle)) =
-        read_current_selection_context(fallback_point, &config)
-    {
-        let state = app.state::<AppState>();
-        state.store_latest_selection(context.clone());
-        state.store_latest_selection_window_handle(source_window_handle);
-        if let Ok(opened) = open_panel_for_context(app, context) {
-            state.store_latest_selection(opened);
-            state.store_latest_selection_window_handle(source_window_handle);
-        }
-    } else {
-        clear_selection_and_hide_button(app);
-    }
 }
 
 fn clear_selection_and_hide_button(app: &tauri::AppHandle) {
@@ -1095,6 +1249,7 @@ fn assistant_window_rects(app: &tauri::AppHandle) -> Vec<Rect> {
         "ai-panel",
         "source-text",
         "translate-result",
+        "screenshot-overlay",
     ]
     .into_iter()
     .filter_map(|label| app.get_webview_window(label))
@@ -1123,7 +1278,8 @@ fn current_config(app: &tauri::AppHandle) -> Option<AppConfig> {
 fn read_current_selection_context(
     fallback_point: Point,
     config: &AppConfig,
-) -> Option<(crate::commands::selection::PanelContext, isize)> {
+    options: SelectionCaptureOptions,
+) -> Option<SelectionCaptureResult> {
     let (window, source_window_handle) = match foreground_window_info(config) {
         Some(result) => result,
         None => {
@@ -1137,10 +1293,24 @@ fn read_current_selection_context(
         "foreground window: process={}, title={:?}, elevated={}, fallback_point={fallback_point:?}",
         window.process_name, window.window_title, window.elevated
     ));
-    let uia_result = read_current_uia_selection_from_hwnd(source_window_handle as *mut c_void);
+    let visual_selection = options.drag_points.and_then(|(down_point, up_point)| {
+        visual_selection_from_drag(source_window_handle, down_point, up_point)
+    });
+    let uia_points = options
+        .drag_points
+        .map(uia_probe_points_for_drag)
+        .unwrap_or_default();
+    let uia_result = if uia_points.is_empty() {
+        read_current_uia_selection_from_hwnd(source_window_handle as *mut c_void)
+    } else {
+        read_current_uia_selection_from_hwnd_with_points(
+            source_window_handle as *mut c_void,
+            &uia_points,
+        )
+    };
     if let Some(selection) = uia_result
         .clone()
-        .filter(|result| !result.rects.is_empty())
+        .filter(|result| result.is_usable())
         .and_then(|result| {
             SelectionCandidate::from_uia_result(
                 result,
@@ -1150,20 +1320,44 @@ fn read_current_selection_context(
             )
         })
     {
+        let has_visual_selection = visual_selection.is_some();
+        let matches_drag = options
+            .drag_points
+            .map(|(down_point, up_point)| {
+                selection_geometry_matches_drag_gesture(
+                    &selection.selection_rects,
+                    down_point,
+                    up_point,
+                    has_visual_selection,
+                )
+            })
+            .unwrap_or(true);
+
+        if !options.require_drag_rect_match || matches_drag {
+            trace_selection_monitor(format_args!(
+                "selection read succeeded via UIA: chars={}, rects={}, visual_selection={}",
+                selection.text.chars().count(),
+                selection.selection_rects.len(),
+                has_visual_selection
+            ));
+            return match create_panel_context_for_selection(selection, false) {
+                Ok(context) => Some(SelectionCaptureResult {
+                    context,
+                    source_window_handle,
+                    visual_selection,
+                }),
+                Err(error) => {
+                    trace_selection_monitor(format_args!(
+                        "selection read failed: UIA context error: {error:?}"
+                    ));
+                    None
+                }
+            };
+        }
+
         trace_selection_monitor(format_args!(
-            "selection read succeeded via UIA: chars={}, rects={}",
-            selection.text.chars().count(),
-            selection.selection_rects.len()
+            "selection read skipped UIA: geometry does not match current drag gesture"
         ));
-        return match create_panel_context_for_selection(selection, false) {
-            Ok(context) => Some((context, source_window_handle)),
-            Err(error) => {
-                trace_selection_monitor(format_args!(
-                    "selection read failed: UIA context error: {error:?}"
-                ));
-                None
-            }
-        };
     }
 
     if should_block_clipboard_fallback_after_uia_result(uia_result.as_ref()) {
@@ -1181,6 +1375,13 @@ fn read_current_selection_context(
         is_elevated_window: window.elevated,
         disable_in_elevated_windows: config.disable_in_elevated_windows,
     };
+
+    if !options.allow_clipboard_fallback {
+        trace_selection_monitor(format_args!(
+            "selection read skipped clipboard fallback for automatic mouse selection"
+        ));
+        return None;
+    }
 
     if !should_use_clipboard_fallback(&fallback_context) {
         trace_selection_monitor(format_args!(
@@ -1210,13 +1411,148 @@ fn read_current_selection_context(
         fallback_point,
     );
     match create_panel_context_for_selection(selection, false) {
-        Ok(context) => Some((context, source_window_handle)),
+        Ok(context) => Some(SelectionCaptureResult {
+            context,
+            source_window_handle,
+            visual_selection,
+        }),
         Err(error) => {
             trace_selection_monitor(format_args!(
                 "selection read failed: context error: {error:?}"
             ));
             None
         }
+    }
+}
+
+pub fn capture_screen_region_png_data_url(rect: Rect) -> Result<String, crate::types::PublicError> {
+    let width = rect.width.round().max(1.0) as i32;
+    let height = rect.height.round().max(1.0) as i32;
+    let x = rect.x.round() as i32;
+    let y = rect.y.round() as i32;
+
+    let screen_dc = unsafe { GetDC(null_mut()) };
+    if screen_dc.is_null() {
+        return Err(public_error(
+            "screenshot_capture_failed",
+            "无法读取屏幕 DC。",
+        ));
+    }
+
+    let memory_dc = unsafe { CreateCompatibleDC(screen_dc) };
+    if memory_dc.is_null() {
+        unsafe {
+            ReleaseDC(null_mut(), screen_dc);
+        }
+        return Err(public_error(
+            "screenshot_capture_failed",
+            "无法创建截图缓冲区。",
+        ));
+    }
+
+    let bitmap = unsafe { CreateCompatibleBitmap(screen_dc, width, height) };
+    if bitmap.is_null() {
+        unsafe {
+            DeleteDC(memory_dc);
+            ReleaseDC(null_mut(), screen_dc);
+        }
+        return Err(public_error(
+            "screenshot_capture_failed",
+            "无法创建截图位图。",
+        ));
+    }
+
+    let previous = unsafe { SelectObject(memory_dc, bitmap) };
+    let copied = unsafe { BitBlt(memory_dc, 0, 0, width, height, screen_dc, x, y, SRCCOPY) };
+    if copied == 0 {
+        unsafe {
+            SelectObject(memory_dc, previous);
+            DeleteObject(bitmap);
+            DeleteDC(memory_dc);
+            ReleaseDC(null_mut(), screen_dc);
+        }
+        return Err(public_error(
+            "screenshot_capture_failed",
+            "截图区域读取失败。",
+        ));
+    }
+
+    let mut bitmap_info = BITMAPINFO {
+        bmiHeader: BITMAPINFOHEADER {
+            biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+            biWidth: width,
+            biHeight: -height,
+            biPlanes: 1,
+            biBitCount: 32,
+            biCompression: BI_RGB,
+            biSizeImage: (width * height * 4) as u32,
+            biXPelsPerMeter: 0,
+            biYPelsPerMeter: 0,
+            biClrUsed: 0,
+            biClrImportant: 0,
+        },
+        bmiColors: [RGBQUAD {
+            rgbBlue: 0,
+            rgbGreen: 0,
+            rgbRed: 0,
+            rgbReserved: 0,
+        }],
+    };
+    let mut bgra = vec![0_u8; (width * height * 4) as usize];
+    let scanlines = unsafe {
+        GetDIBits(
+            memory_dc,
+            bitmap,
+            0,
+            height as u32,
+            bgra.as_mut_ptr() as *mut c_void,
+            &mut bitmap_info,
+            DIB_RGB_COLORS,
+        )
+    };
+
+    unsafe {
+        SelectObject(memory_dc, previous);
+        DeleteObject(bitmap);
+        DeleteDC(memory_dc);
+        ReleaseDC(null_mut(), screen_dc);
+    }
+
+    if scanlines == 0 {
+        return Err(public_error(
+            "screenshot_capture_failed",
+            "截图像素读取失败。",
+        ));
+    }
+
+    let mut rgba = Vec::with_capacity(bgra.len());
+    for pixel in bgra.chunks_exact(4) {
+        rgba.extend_from_slice(&[pixel[2], pixel[1], pixel[0], 255]);
+    }
+
+    let mut png_bytes = Vec::new();
+    {
+        let mut encoder = png::Encoder::new(&mut png_bytes, width as u32, height as u32);
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(png::BitDepth::Eight);
+        let mut writer = encoder
+            .write_header()
+            .map_err(|err| public_error("screenshot_encode_failed", err))?;
+        writer
+            .write_image_data(&rgba)
+            .map_err(|err| public_error("screenshot_encode_failed", err))?;
+    }
+
+    Ok(format!(
+        "data:image/png;base64,{}",
+        base64::engine::general_purpose::STANDARD.encode(png_bytes)
+    ))
+}
+
+fn public_error(code: &str, err: impl ToString) -> crate::types::PublicError {
+    crate::types::PublicError {
+        code: code.to_string(),
+        message: err.to_string(),
     }
 }
 

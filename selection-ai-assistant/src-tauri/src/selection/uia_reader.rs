@@ -50,20 +50,49 @@ impl UiaSelectionResult {
         focused: Option<UiaSelectionResult>,
         window: Option<UiaSelectionResult>,
     ) -> Option<UiaSelectionResult> {
-        match (focused, window) {
-            (Some(focused), _window) if focused.is_password_control => Some(focused),
-            (Some(focused), Some(window)) => {
-                let focused_has_geometry = focused.selection_anchor_point().is_some();
-                let window_has_geometry = window.selection_anchor_point().is_some();
+        Self::prefer_best_attempt([focused, window])
+    }
 
-                if !focused_has_geometry && window_has_geometry {
-                    Some(window)
-                } else {
-                    Some(focused)
-                }
+    pub fn prefer_best_attempt(
+        attempts: impl IntoIterator<Item = Option<UiaSelectionResult>>,
+    ) -> Option<UiaSelectionResult> {
+        let mut best: Option<UiaSelectionResult> = None;
+
+        for attempt in attempts.into_iter().flatten() {
+            if attempt.is_password_control {
+                return Some(attempt);
             }
-            (focused, window) => focused.or(window),
+
+            best = Some(match best {
+                Some(current) if should_keep_current_attempt(&current, &attempt) => current,
+                _ => attempt,
+            });
         }
+
+        best
+    }
+}
+
+fn should_keep_current_attempt(
+    current: &UiaSelectionResult,
+    candidate: &UiaSelectionResult,
+) -> bool {
+    let current_has_text = current.is_usable();
+    let candidate_has_text = candidate.is_usable();
+    let current_has_geometry = current.selection_anchor_point().is_some();
+    let candidate_has_geometry = candidate.selection_anchor_point().is_some();
+
+    match (
+        current_has_text,
+        candidate_has_text,
+        current_has_geometry,
+        candidate_has_geometry,
+    ) {
+        (true, true, false, true) => false,
+        (false, true, _, _) => false,
+        (true, false, _, _) => true,
+        (_, _, true, false) => true,
+        _ => true,
     }
 }
 
@@ -75,11 +104,19 @@ pub fn read_current_uia_selection_from_hwnd(
 }
 
 #[cfg(windows)]
+pub fn read_current_uia_selection_from_hwnd_with_points(
+    hwnd: *mut std::ffi::c_void,
+    points: &[Point],
+) -> Option<UiaSelectionResult> {
+    windows_uia::read_current_uia_selection_from_hwnd_with_points(hwnd, points)
+}
+
+#[cfg(windows)]
 mod windows_uia {
     use super::{SelectionConfidence, UiaSelectionResult};
-    use crate::types::Rect;
+    use crate::types::{Point, Rect};
     use windows::Win32::{
-        Foundation::HWND,
+        Foundation::{HWND, POINT},
         System::{
             Com::{
                 CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_INPROC_SERVER,
@@ -99,6 +136,13 @@ mod windows_uia {
     pub fn read_current_uia_selection_from_hwnd(
         hwnd: *mut std::ffi::c_void,
     ) -> Option<UiaSelectionResult> {
+        read_current_uia_selection_from_hwnd_with_points(hwnd, &[])
+    }
+
+    pub fn read_current_uia_selection_from_hwnd_with_points(
+        hwnd: *mut std::ffi::c_void,
+        points: &[Point],
+    ) -> Option<UiaSelectionResult> {
         if hwnd.is_null() {
             return None;
         }
@@ -106,7 +150,7 @@ mod windows_uia {
         unsafe {
             let hr = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
             let should_uninitialize = hr.is_ok();
-            let result = read_selection_from_initialized_com(HWND(hwnd));
+            let result = read_selection_from_initialized_com(HWND(hwnd), points);
             if should_uninitialize {
                 CoUninitialize();
             }
@@ -114,13 +158,16 @@ mod windows_uia {
         }
     }
 
-    unsafe fn read_selection_from_initialized_com(hwnd: HWND) -> Option<UiaSelectionResult> {
+    unsafe fn read_selection_from_initialized_com(
+        hwnd: HWND,
+        points: &[Point],
+    ) -> Option<UiaSelectionResult> {
         let automation: IUIAutomation =
             CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER).ok()?;
         let focused_result = automation
             .GetFocusedElement()
             .ok()
-            .and_then(|element| read_selection_from_element(&element));
+            .and_then(|element| read_selection_from_element_or_ancestors(&automation, &element));
         if focused_result
             .as_ref()
             .map(|result| result.is_password_control)
@@ -129,12 +176,45 @@ mod windows_uia {
             return focused_result;
         }
 
+        let point_results = points.iter().map(|point| {
+            automation
+                .ElementFromPoint(POINT {
+                    x: point.x.round() as i32,
+                    y: point.y.round() as i32,
+                })
+                .ok()
+                .and_then(|element| read_selection_from_element_or_ancestors(&automation, &element))
+        });
         let window_result = automation
             .ElementFromHandle(hwnd)
             .ok()
-            .and_then(|element| read_selection_from_element(&element));
+            .and_then(|element| read_selection_from_element_or_ancestors(&automation, &element));
 
-        UiaSelectionResult::prefer_focused_attempt(focused_result, window_result)
+        UiaSelectionResult::prefer_best_attempt(
+            std::iter::once(focused_result)
+                .chain(point_results)
+                .chain(std::iter::once(window_result)),
+        )
+    }
+
+    unsafe fn read_selection_from_element_or_ancestors(
+        automation: &IUIAutomation,
+        element: &windows::Win32::UI::Accessibility::IUIAutomationElement,
+    ) -> Option<UiaSelectionResult> {
+        let walker = automation.RawViewWalker().ok();
+        let mut current = Some(element.clone());
+
+        for _ in 0..6 {
+            let element = current?;
+            if let Some(result) = read_selection_from_element(&element) {
+                return Some(result);
+            }
+            current = walker
+                .as_ref()
+                .and_then(|walker| walker.GetParentElement(&element).ok());
+        }
+
+        None
     }
 
     unsafe fn read_selection_from_element(

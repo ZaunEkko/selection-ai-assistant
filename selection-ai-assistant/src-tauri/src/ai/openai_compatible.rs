@@ -47,6 +47,70 @@ pub struct ChatCompletionRequest {
     pub stream: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct VisionChatCompletionRequest {
+    pub model: String,
+    pub messages: Vec<VisionChatMessage>,
+    pub stream: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct VisionChatMessage {
+    pub role: String,
+    pub content: VisionChatContent,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(untagged)]
+pub enum VisionChatContent {
+    Text(String),
+    Parts(Vec<VisionChatContentPart>),
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum VisionChatContentPart {
+    Text { text: String },
+    ImageUrl { image_url: VisionImageUrl },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct VisionImageUrl {
+    pub url: String,
+}
+
+pub fn build_vision_chat_request(
+    model: impl Into<String>,
+    system_prompt: impl Into<String>,
+    user_prompt: impl Into<String>,
+    image_data_url: impl Into<String>,
+    stream: bool,
+) -> VisionChatCompletionRequest {
+    VisionChatCompletionRequest {
+        model: model.into(),
+        messages: vec![
+            VisionChatMessage {
+                role: "system".to_string(),
+                content: VisionChatContent::Text(system_prompt.into()),
+            },
+            VisionChatMessage {
+                role: "user".to_string(),
+                content: VisionChatContent::Parts(vec![
+                    VisionChatContentPart::Text {
+                        text: user_prompt.into(),
+                    },
+                    VisionChatContentPart::ImageUrl {
+                        image_url: VisionImageUrl {
+                            url: image_data_url.into(),
+                        },
+                    },
+                ]),
+            },
+        ],
+        stream,
+    }
+}
+
 pub fn build_chat_request(
     model: impl Into<String>,
     messages: Vec<ChatMessage>,
@@ -214,6 +278,50 @@ impl OpenAiCompatibleClient {
         let body = build_chat_request(provider.model.clone(), messages, true);
         let headers = Self::validated_provider_headers(provider)?;
 
+        self.stream_chat_request(provider, endpoint, headers, api_key, body, &mut on_delta)
+            .await
+    }
+
+    pub async fn stream_vision_chat<F>(
+        &self,
+        provider: &AiProviderConfig,
+        api_key: &str,
+        system_prompt: &str,
+        user_prompt: &str,
+        image_data_url: String,
+        mut on_delta: F,
+    ) -> Result<(), AiClientError>
+    where
+        F: FnMut(String) + Send,
+    {
+        Self::validate_provider(provider, api_key)?;
+        let endpoint = Self::endpoint(&provider.base_url)?;
+        let body = build_vision_chat_request(
+            provider.model.clone(),
+            system_prompt,
+            user_prompt,
+            image_data_url,
+            true,
+        );
+        let headers = Self::validated_provider_headers(provider)?;
+
+        self.stream_chat_request(provider, endpoint, headers, api_key, body, &mut on_delta)
+            .await
+    }
+
+    async fn stream_chat_request<F, B>(
+        &self,
+        provider: &AiProviderConfig,
+        endpoint: String,
+        headers: HeaderMap,
+        api_key: &str,
+        body: B,
+        on_delta: &mut F,
+    ) -> Result<(), AiClientError>
+    where
+        F: FnMut(String) + Send,
+        B: Serialize,
+    {
         let response = self
             .http
             .post(endpoint)

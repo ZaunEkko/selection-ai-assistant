@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Selection AI Assistant",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "identifier": "com.selection-ai-assistant.app",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -34,8 +34,8 @@
       {
         "label": "replacement-preset",
         "title": "Replacement Preset",
-        "width": 260,
-        "height": 92,
+        "width": 420,
+        "height": 78,
         "decorations": false,
         "transparent": true,
         "shadow": false,
@@ -77,6 +77,18 @@
         "alwaysOnTop": true,
         "visible": false,
         "skipTaskbar": true
+      },
+      {
+        "label": "screenshot-overlay",
+        "title": "Screenshot Translate",
+        "width": 800,
+        "height": 600,
+        "decorations": false,
+        "transparent": true,
+        "shadow": false,
+        "alwaysOnTop": true,
+        "visible": false,
+        "skipTaskbar": true
       }
     ],
     "security": {
@@ -86,6 +98,8 @@
   "bundle": {
     "active": true,
     "targets": "all",
-    "icon": ["icons/icon.ico"]
+    "icon": [
+      "icons/icon.ico"
+    ]
   }
 }
