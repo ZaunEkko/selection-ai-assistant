@@ -240,6 +240,36 @@ fn each_window_has_an_exact_minimum_capability() {
 }
 
 #[test]
+fn production_and_development_csp_are_explicitly_scoped() {
+    let config_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tauri.conf.json");
+    let config: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(config_path).expect("tauri config should load"),
+    )
+    .expect("tauri config should be valid json");
+    let security = &config["app"]["security"];
+    let production = security["csp"]
+        .as_str()
+        .expect("production CSP should be a string");
+    let development = security["devCsp"]
+        .as_str()
+        .expect("development CSP should be a string");
+
+    assert_eq!(
+        production,
+        "default-src 'self'; connect-src ipc: http://ipc.localhost; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'"
+    );
+    assert_eq!(
+        development,
+        "default-src 'self'; connect-src ipc: http://ipc.localhost http://localhost:5173 ws://localhost:5173; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'"
+    );
+    assert!(!production.contains("localhost:5173"));
+    assert!(!production.contains("https:"));
+    assert!(!production.contains("ws:"));
+    assert!(!development.contains("https:"));
+    assert!(!development.contains("ws://127.0.0.1"));
+}
+
+#[test]
 fn settings_path_uses_local_app_config_directory_when_available() {
     let path = AppConfig::settings_path().expect("settings path should resolve");
 
