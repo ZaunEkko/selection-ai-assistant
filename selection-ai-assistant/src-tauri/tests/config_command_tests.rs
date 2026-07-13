@@ -166,6 +166,59 @@ fn save_provider_update_uses_original_provider_id_when_renaming() {
 }
 
 #[test]
+fn save_provider_update_rejects_renaming_to_existing_id() {
+    let state = AppState::new(AppConfig {
+        default_provider_id: Some("old-id".to_string()),
+        providers: vec![
+            provider("old-id", "https://old.example/v1", "old-model"),
+            provider(
+                "existing-id",
+                "https://existing.example/v1",
+                "existing-model",
+            ),
+        ],
+        ..AppConfig::default()
+    });
+
+    let err = save_provider_update_in_state(
+        &state,
+        provider_update(Some("old-id"), "existing-id", SecretUpdate::Keep),
+    )
+    .expect_err("renaming to an existing provider id should fail");
+
+    assert_eq!(err.code, "provider_id_conflict");
+    let config = get_config_from_state(&state).expect("config should remain readable");
+    assert_eq!(config.default_provider_id.as_deref(), Some("old-id"));
+    assert_eq!(config.providers.len(), 2);
+    assert_eq!(config.providers[0].id, "old-id");
+    assert_eq!(config.providers[1].id, "existing-id");
+}
+
+#[test]
+fn save_provider_update_rejects_duplicate_new_provider_id() {
+    let state = AppState::new(AppConfig {
+        default_provider_id: Some("existing-id".to_string()),
+        providers: vec![provider(
+            "existing-id",
+            "https://existing.example/v1",
+            "existing-model",
+        )],
+        ..AppConfig::default()
+    });
+
+    let err = save_provider_update_in_state(
+        &state,
+        provider_update(None, "existing-id", SecretUpdate::Keep),
+    )
+    .expect_err("new provider should not reuse an existing provider id");
+
+    assert_eq!(err.code, "provider_id_conflict");
+    let config = get_config_from_state(&state).expect("config should remain readable");
+    assert_eq!(config.providers.len(), 1);
+    assert_eq!(config.providers[0].model, "existing-model");
+}
+
+#[test]
 fn validate_replacement_text_rejects_empty_text() {
     let err = validate_replacement_text("   ").expect_err("empty replacement should fail");
     assert_eq!(err.code, "replacement_text_required");
