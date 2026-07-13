@@ -23,6 +23,7 @@ pub fn run() {
         ))
         .invoke_handler(tauri::generate_handler![
             commands::config::get_config,
+            commands::config::get_runtime_preferences,
             commands::config::save_app_behavior_config,
             commands::config::confirm_main_window_close,
             commands::config::save_provider_config,

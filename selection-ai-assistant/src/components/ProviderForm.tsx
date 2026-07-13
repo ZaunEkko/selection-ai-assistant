@@ -1,9 +1,25 @@
 import { FormEvent, useEffect, useState } from 'react';
-import { formatCommandError, listProviderModels, testProviderConnection, type AiProviderConfig, type AiProviderKind } from '../api/tauri';
+import {
+  formatCommandError,
+  listProviderModels,
+  testProviderConnection,
+  type AiProviderKind,
+  type ProviderConfigView,
+  type ProviderUpdate,
+} from '../api/tauri';
 
 type Props = {
-  initialProvider?: AiProviderConfig;
-  onSave: (provider: AiProviderConfig) => Promise<void>;
+  initialProvider?: ProviderConfigView;
+  onSave: (provider: ProviderUpdate) => Promise<void>;
+};
+
+type ProviderDraft = {
+  id: string;
+  name: string;
+  baseUrl: string;
+  model: string;
+  providerKind: AiProviderKind;
+  apiKeyRef: string;
 };
 
 type Feedback = {
@@ -14,7 +30,7 @@ type Feedback = {
 type ProviderPreset = {
   key: string;
   label: string;
-  provider: AiProviderConfig;
+  provider: ProviderDraft;
 };
 
 const providerPresets: ProviderPreset[] = [
@@ -27,9 +43,7 @@ const providerPresets: ProviderPreset[] = [
       baseUrl: 'https://api.openai.com/v1',
       model: 'gpt-4.1-mini',
       providerKind: 'openAiCompatible',
-      apiKey: '',
       apiKeyRef: 'credential://openai',
-      headers: [],
     },
   },
   {
@@ -41,9 +55,7 @@ const providerPresets: ProviderPreset[] = [
       baseUrl: 'https://api.anthropic.com/v1',
       model: 'claude-sonnet-4-6',
       providerKind: 'anthropic',
-      apiKey: '',
       apiKeyRef: 'credential://anthropic',
-      headers: [],
     },
   },
   {
@@ -55,9 +67,7 @@ const providerPresets: ProviderPreset[] = [
       baseUrl: 'https://generativelanguage.googleapis.com/v1beta',
       model: 'gemini-3.5-flash',
       providerKind: 'gemini',
-      apiKey: '',
       apiKeyRef: 'credential://gemini',
-      headers: [],
     },
   },
   {
@@ -69,9 +79,7 @@ const providerPresets: ProviderPreset[] = [
       baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
       model: 'glm-4.5',
       providerKind: 'openAiCompatible',
-      apiKey: '',
       apiKeyRef: 'credential://zhipu',
-      headers: [],
     },
   },
   {
@@ -83,9 +91,7 @@ const providerPresets: ProviderPreset[] = [
       baseUrl: 'https://api.deepseek.com/v1',
       model: 'deepseek-chat',
       providerKind: 'openAiCompatible',
-      apiKey: '',
       apiKeyRef: 'credential://deepseek',
-      headers: [],
     },
   },
   {
@@ -97,9 +103,7 @@ const providerPresets: ProviderPreset[] = [
       baseUrl: 'https://coding.dashscope.aliyuncs.com/v1',
       model: 'qwen-plus',
       providerKind: 'openAiCompatible',
-      apiKey: '',
       apiKeyRef: 'credential://bailian',
-      headers: [],
     },
   },
   {
@@ -111,9 +115,7 @@ const providerPresets: ProviderPreset[] = [
       baseUrl: 'https://api.moonshot.cn/v1',
       model: 'moonshot-v1-8k',
       providerKind: 'openAiCompatible',
-      apiKey: '',
       apiKeyRef: 'credential://kimi',
-      headers: [],
     },
   },
   {
@@ -125,9 +127,7 @@ const providerPresets: ProviderPreset[] = [
       baseUrl: 'https://api.minimax.io/v1',
       model: 'MiniMax-M1',
       providerKind: 'openAiCompatible',
-      apiKey: '',
       apiKeyRef: 'credential://minimax',
-      headers: [],
     },
   },
   {
@@ -139,9 +139,7 @@ const providerPresets: ProviderPreset[] = [
       baseUrl: 'https://api.siliconflow.cn/v1',
       model: 'deepseek-ai/DeepSeek-V3',
       providerKind: 'openAiCompatible',
-      apiKey: '',
       apiKeyRef: 'credential://siliconflow',
-      headers: [],
     },
   },
   {
@@ -153,9 +151,7 @@ const providerPresets: ProviderPreset[] = [
       baseUrl: 'https://bedrock-mantle.us-east-1.api.aws/v1',
       model: 'us.anthropic.claude-sonnet-4-5-20250929-v1:0',
       providerKind: 'openAiCompatible',
-      apiKey: '',
       apiKeyRef: 'credential://aws-bedrock',
-      headers: [],
     },
   },
   {
@@ -167,9 +163,7 @@ const providerPresets: ProviderPreset[] = [
       baseUrl: 'https://ark.cn-beijing.volces.com/api/v3',
       model: 'doubao-seed-1-6',
       providerKind: 'openAiCompatible',
-      apiKey: '',
       apiKeyRef: 'credential://volcengine',
-      headers: [],
     },
   },
   {
@@ -181,9 +175,7 @@ const providerPresets: ProviderPreset[] = [
       baseUrl: '',
       model: '',
       providerKind: 'openAiCompatible',
-      apiKey: '',
       apiKeyRef: 'credential://agentplan',
-      headers: [],
     },
   },
   {
@@ -195,26 +187,42 @@ const providerPresets: ProviderPreset[] = [
       baseUrl: '',
       model: '',
       providerKind: 'openAiCompatible',
-      apiKey: '',
       apiKeyRef: 'credential://opencode',
-      headers: [],
     },
   },
 ];
 
-const defaultProvider: AiProviderConfig = {
+const defaultProvider: ProviderDraft = {
   id: 'openrouter',
   name: 'OpenRouter',
   baseUrl: 'https://openrouter.ai/api/v1',
   model: '',
   providerKind: 'openAiCompatible',
-  apiKey: '',
   apiKeyRef: 'credential://openrouter',
-  headers: [],
 };
 
+function providerDraftFromView(provider: ProviderConfigView): ProviderDraft {
+  return {
+    id: provider.id,
+    name: provider.name,
+    baseUrl: provider.baseUrl,
+    model: provider.model,
+    providerKind: provider.providerKind,
+    apiKeyRef: provider.apiKeyRef,
+  };
+}
+
 export function ProviderForm({ initialProvider, onSave }: Props) {
-  const [provider, setProvider] = useState<AiProviderConfig>(initialProvider ?? defaultProvider);
+  const [provider, setProvider] = useState<ProviderDraft>(
+    initialProvider ? providerDraftFromView(initialProvider) : defaultProvider,
+  );
+  const [originalProviderId, setOriginalProviderId] = useState<string | null>(initialProvider?.id ?? null);
+  const [apiKeyInput, setApiKeyInput] = useState('');
+  const [clearApiKey, setClearApiKey] = useState(false);
+  const [apiKeyConfigured, setApiKeyConfigured] = useState(initialProvider?.apiKeyConfigured ?? false);
+  const [customHeadersConfigured, setCustomHeadersConfigured] = useState(
+    initialProvider?.customHeadersConfigured ?? false,
+  );
   const [saving, setSaving] = useState(false);
   const [loadingModels, setLoadingModels] = useState(false);
   const [testing, setTesting] = useState(false);
@@ -224,19 +232,38 @@ export function ProviderForm({ initialProvider, onSave }: Props) {
   const busy = saving || loadingModels || testing;
 
   useEffect(() => {
-    if (initialProvider) {
-      setProvider(initialProvider);
-    }
+    const nextProvider = initialProvider ? providerDraftFromView(initialProvider) : defaultProvider;
+    setProvider(nextProvider);
+    setOriginalProviderId(initialProvider?.id ?? null);
+    setApiKeyInput('');
+    setClearApiKey(false);
+    setApiKeyConfigured(initialProvider?.apiKeyConfigured ?? false);
+    setCustomHeadersConfigured(initialProvider?.customHeadersConfigured ?? false);
   }, [initialProvider]);
+
+  function currentProviderUpdate(): ProviderUpdate {
+    return {
+      originalProviderId,
+      ...provider,
+      apiKey:
+        apiKeyInput.length > 0
+          ? { action: 'replace', value: apiKeyInput }
+          : clearApiKey
+            ? { action: 'clear' }
+            : { action: 'keep' },
+    };
+  }
 
   function applyPreset(key: string) {
     const preset = providerPresets.find((item) => item.key === key);
     if (!preset) return;
 
-    setProvider({
-      ...preset.provider,
-      apiKey: provider.apiKey,
-    });
+    setProvider(preset.provider);
+    setOriginalProviderId(null);
+    setApiKeyInput('');
+    setClearApiKey(false);
+    setApiKeyConfigured(false);
+    setCustomHeadersConfigured(false);
     setModels([]);
     setModelsOpen(false);
     setFeedback(null);
@@ -252,7 +279,7 @@ export function ProviderForm({ initialProvider, onSave }: Props) {
     setFeedback({ kind: 'status', message: '正在保存服务商配置…' });
 
     try {
-      await onSave(provider);
+      await onSave(currentProviderUpdate());
       setFeedback({ kind: 'status', message: '已保存服务商配置。' });
     } catch (err) {
       setFeedback({ kind: 'error', message: `保存失败：${formatCommandError(err)}` });
@@ -265,7 +292,7 @@ export function ProviderForm({ initialProvider, onSave }: Props) {
     setLoadingModels(true);
     setFeedback({ kind: 'status', message: '正在加载模型列表…' });
     try {
-      const loadedModels = await listProviderModels(provider);
+      const loadedModels = await listProviderModels(currentProviderUpdate());
       setModels(loadedModels);
       setModelsOpen(false);
       setFeedback({ kind: 'status', message: `已加载 ${loadedModels.length} 个模型。` });
@@ -283,7 +310,7 @@ export function ProviderForm({ initialProvider, onSave }: Props) {
     setTesting(true);
     setFeedback({ kind: 'status', message: '正在测试服务商连接…' });
     try {
-      const result = await testProviderConnection(provider);
+      const result = await testProviderConnection(currentProviderUpdate());
       setFeedback({
         kind: 'status',
         message: result.modelListAvailable
@@ -417,14 +444,37 @@ export function ProviderForm({ initialProvider, onSave }: Props) {
         <input
           disabled={busy}
           type="password"
-          value={provider.apiKey}
-          onChange={(event) => setProvider({ ...provider, apiKey: event.target.value })}
+          value={apiKeyInput}
+          placeholder={apiKeyConfigured && !clearApiKey ? '留空以保留已保存密钥' : '输入新的 API 密钥'}
+          onChange={(event) => {
+            setApiKeyInput(event.target.value);
+            setClearApiKey(false);
+          }}
           aria-describedby="api-key-help"
         />
       </label>
       <p id="api-key-help" className="field-help">
-        API 密钥会以明文保存到本机 settings 文件；仍支持 SELECTION_AI_API_KEY 环境变量兜底。
+        {clearApiKey
+          ? '保存后会清除已保存的 API 密钥；SELECTION_AI_API_KEY 环境变量仍可作为兜底。'
+          : apiKeyConfigured
+            ? '已保存 API 密钥；留空会保持不变，输入新值会替换。密钥仍以明文保存在本机 settings 文件。'
+            : 'API 密钥会以明文保存到本机 settings 文件；仍支持 SELECTION_AI_API_KEY 环境变量兜底。'}
       </p>
+      {apiKeyConfigured && (
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => {
+            setApiKeyInput('');
+            setClearApiKey((current) => !current);
+          }}
+        >
+          {clearApiKey ? '撤销清除密钥' : '清除已保存密钥'}
+        </button>
+      )}
+      {customHeadersConfigured && (
+        <p className="field-help">已配置自定义请求头；保存时会保留现有值，但不会在界面或 IPC 中回显。</p>
+      )}
       <label>
         API 密钥引用（未来安全存储）
         <input

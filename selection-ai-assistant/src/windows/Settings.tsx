@@ -9,11 +9,11 @@ import {
   saveAppBehaviorConfig,
   saveProviderConfig,
   setDefaultProvider,
-  type AiProviderConfig,
   type AppBehaviorConfig,
-  type AppConfig,
   type CloseButtonBehavior,
   type PlatformCapabilities,
+  type ProviderUpdate,
+  type SettingsConfigView,
 } from '../api/tauri';
 import { ProviderForm } from '../components/ProviderForm';
 
@@ -90,7 +90,7 @@ function PlatformCapabilitySummary({ capabilities }: { capabilities: PlatformCap
 }
 
 export function Settings() {
-  const [config, setConfig] = useState<AppConfig | null>(null);
+  const [config, setConfig] = useState<SettingsConfigView | null>(null);
   const [platformCapabilities, setPlatformCapabilities] = useState<PlatformCapabilities | null>(null);
   const [appBehavior, setAppBehavior] = useState<AppBehaviorConfig>(defaultAppBehavior);
   const [behaviorSaving, setBehaviorSaving] = useState(false);
@@ -146,7 +146,7 @@ export function Settings() {
     };
   }, []);
 
-  async function handleSave(provider: AiProviderConfig) {
+  async function handleSave(provider: ProviderUpdate) {
     const next = await saveProviderConfig(provider);
     setConfig(next);
   }
@@ -177,7 +177,7 @@ export function Settings() {
 
     try {
       const next = await saveAppBehaviorConfig(appBehavior);
-      setConfig(next);
+      setConfig((current) => (current ? { ...current, ...next } : current));
       setAppBehavior({
         hotkey: next.hotkey,
         launchAtStartup: next.launchAtStartup,
@@ -201,7 +201,7 @@ export function Settings() {
 
     try {
       const next = await confirmMainWindowClose(behavior);
-      setConfig(next);
+      setConfig((current) => (current ? { ...current, ...next } : current));
       setAppBehavior({
         hotkey: next.hotkey,
         launchAtStartup: next.launchAtStartup,

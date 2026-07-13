@@ -6,11 +6,15 @@ use std::thread;
 
 use selection_ai_assistant_lib::ai::action_classifier::AiAction;
 use selection_ai_assistant_lib::ai::openai_compatible::ChatMessage;
+use selection_ai_assistant_lib::app_state::AppState;
 use selection_ai_assistant_lib::commands::ai::{
-    build_prompt_messages, list_provider_models, stream_chat_events_for_request,
-    test_provider_connection, AiStreamErrorPayload,
+    build_prompt_messages, list_provider_models_for_provider, list_provider_models_for_update,
+    stream_chat_events_for_request, test_provider_connection_for_provider,
+    test_provider_connection_for_update, AiStreamErrorPayload,
 };
-use selection_ai_assistant_lib::config::{AiProviderConfig, AiProviderKind};
+use selection_ai_assistant_lib::config::{
+    AiProviderConfig, AiProviderKind, AppConfig, ProviderUpdate, SecretUpdate,
+};
 
 fn env_lock() -> &'static Mutex<()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
@@ -62,8 +66,32 @@ fn provider(base_url: String, api_key: &str) -> AiProviderConfig {
         provider_kind: AiProviderKind::OpenAiCompatible,
         api_key: api_key.to_string(),
         api_key_ref: "credential://test".to_string(),
-        headers: vec![("X-Test".to_string(), "yes".to_string())],
+        headers: vec![("X-Test".to_string(), "base-header-secret".to_string())],
     }
+}
+
+fn provider_update(base_url: String) -> ProviderUpdate {
+    ProviderUpdate {
+        original_provider_id: Some("test".to_string()),
+        id: "test".to_string(),
+        name: "Updated Test".to_string(),
+        base_url,
+        model: "".to_string(),
+        provider_kind: AiProviderKind::OpenAiCompatible,
+        api_key: SecretUpdate::Keep,
+        api_key_ref: "credential://test".to_string(),
+    }
+}
+
+fn state_with_saved_provider() -> AppState {
+    AppState::new(AppConfig {
+        default_provider_id: Some("test".to_string()),
+        providers: vec![provider(
+            "https://saved.example/v1".to_string(),
+            "dummy-api-key",
+        )],
+        ..AppConfig::default()
+    })
 }
 
 fn read_http_request(stream: &mut impl Read) -> String {
@@ -118,7 +146,10 @@ fn spawn_models_server(status_line: &'static str, body: &'static str) -> String 
             request.contains("authorization: Bearer dummy-api-key")
                 || request.contains("Authorization: Bearer dummy-api-key")
         );
-        assert!(request.contains("x-test: yes") || request.contains("X-Test: yes"));
+        assert!(
+            request.contains("x-test: base-header-secret")
+                || request.contains("X-Test: base-header-secret")
+        );
         let response = format!(
             "{status_line}\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{body}",
             body.len()
@@ -246,6 +277,27 @@ fn spawn_gemini_stream_server(body: &'static str) -> String {
     format!("http://{addr}/v1beta")
 }
 
+fn spawn_gemini_stream_error_server(body: &'static str) -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("test server should bind");
+    let addr = listener.local_addr().expect("test server should have addr");
+    thread::spawn(move || {
+        let (mut stream, _) = listener
+            .accept()
+            .expect("test server should accept request");
+        let request = read_http_request(&mut stream);
+        assert!(request
+            .starts_with("POST /v1beta/models/gemini-test:streamGenerateContent?alt=sse HTTP/1.1"));
+        let response = format!(
+            "HTTP/1.1 401 Unauthorized\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{body}",
+            body.len()
+        );
+        stream
+            .write_all(response.as_bytes())
+            .expect("response should write");
+    });
+    format!("http://{addr}/v1beta")
+}
+
 #[tokio::test]
 async fn stream_chat_supports_anthropic_messages_api() {
     let _guard = provider_test_lock().await;
@@ -286,7 +338,7 @@ async fn stream_chat_supports_anthropic_messages_api() {
 async fn anthropic_sse_error_event_emits_stream_error_without_leaking_secret() {
     let _guard = provider_test_lock().await;
     let base_url = spawn_anthropic_messages_server(
-        "event: error\ndata: {\"type\":\"error\",\"error\":{\"message\":\"rate limit dummy-api-key header-secret\"}}\n\n",
+        "event: error\ndata: {\"type\":\"error\",\"error\":{\"message\":\"rate limit dummy-api-key base-header-secret header-secret trace-secret\"}}\n\n",
     );
     let mut provider = provider(base_url, "dummy-api-key");
     provider.provider_kind = AiProviderKind::Anthropic;
@@ -294,6 +346,9 @@ async fn anthropic_sse_error_event_emits_stream_error_without_leaking_secret() {
     provider
         .headers
         .push(("X-API-Key".to_string(), "header-secret".to_string()));
+    provider
+        .headers
+        .push(("X-Trace-Context".to_string(), "trace-secret".to_string()));
 
     let events = std::sync::Mutex::new(Vec::<String>::new());
     stream_chat_events_for_request(
@@ -331,7 +386,9 @@ async fn anthropic_sse_error_event_emits_stream_error_without_leaking_secret() {
     );
     assert!(events[0].contains("[redacted]"));
     assert!(!events[0].contains("dummy-api-key"));
+    assert!(!events[0].contains("base-header-secret"));
     assert!(!events[0].contains("header-secret"));
+    assert!(!events[0].contains("trace-secret"));
     assert_eq!(events[1], "done:request-claude-error");
 }
 
@@ -372,6 +429,61 @@ async fn stream_chat_supports_gemini_stream_generate_content_api() {
 }
 
 #[tokio::test]
+async fn gemini_http_error_redacts_api_key_and_all_custom_header_values() {
+    let _guard = provider_test_lock().await;
+    let base_url = spawn_gemini_stream_error_server(
+        r#"{"error":{"message":"invalid credentials dummy-api-key base-header-secret header-secret trace-secret"}}"#,
+    );
+    let mut provider = provider(base_url, "dummy-api-key");
+    provider.provider_kind = AiProviderKind::Gemini;
+    provider.model = "gemini-test".to_string();
+    provider
+        .headers
+        .push(("X-API-Key".to_string(), "header-secret".to_string()));
+    provider
+        .headers
+        .push(("X-Trace-Context".to_string(), "trace-secret".to_string()));
+
+    let events = std::sync::Mutex::new(Vec::<String>::new());
+    stream_chat_events_for_request(
+        provider,
+        "dummy-api-key".to_string(),
+        "request-gemini-error".to_string(),
+        vec![ChatMessage::user("hello")],
+        |request_id, delta| {
+            events
+                .lock()
+                .expect("events mutex")
+                .push(format!("delta:{request_id}:{delta}"));
+        },
+        |payload| {
+            events.lock().expect("events mutex").push(format!(
+                "error:{}:{}:{}",
+                payload.request_id, payload.code, payload.message
+            ));
+        },
+        |request_id| {
+            events
+                .lock()
+                .expect("events mutex")
+                .push(format!("done:{request_id}"));
+        },
+    )
+    .await;
+
+    let events = events.into_inner().expect("events mutex");
+    assert_eq!(events.len(), 2);
+    assert!(events[0].starts_with("error:request-gemini-error:provider_stream_failed:"));
+    assert!(events[0].contains("HTTP 401"));
+    assert!(events[0].contains("[redacted]"));
+    assert!(!events[0].contains("dummy-api-key"));
+    assert!(!events[0].contains("base-header-secret"));
+    assert!(!events[0].contains("header-secret"));
+    assert!(!events[0].contains("trace-secret"));
+    assert_eq!(events[1], "done:request-gemini-error");
+}
+
+#[tokio::test]
 async fn test_provider_connection_falls_back_to_chat_probe_when_models_endpoint_is_unavailable() {
     let _guard = provider_test_lock().await;
     let base_url = spawn_models_then_chat_server(
@@ -383,7 +495,7 @@ async fn test_provider_connection_falls_back_to_chat_probe_when_models_endpoint_
     let mut provider = provider(base_url, "dummy-api-key");
     provider.model = "qwen-coder-test".to_string();
 
-    let result = test_provider_connection(provider)
+    let result = test_provider_connection_for_provider(provider)
         .await
         .expect("chat probe should allow providers without a models endpoint");
 
@@ -397,13 +509,16 @@ async fn stream_chat_failure_emits_error_then_done_without_leaking_secret() {
     let _guard = provider_test_lock().await;
     let base_url = spawn_chat_server(
         "HTTP/1.1 401 Unauthorized",
-        r#"{"error":{"message":"invalid API key dummy-api-key header-secret"}}"#,
+        r#"{"error":{"message":"invalid API key dummy-api-key base-header-secret header-secret trace-secret"}}"#,
     );
     let mut provider = provider(base_url, "dummy-api-key");
     provider.model = "gpt-test".to_string();
     provider
         .headers
         .push(("X-API-Key".to_string(), "header-secret".to_string()));
+    provider
+        .headers
+        .push(("X-Trace-Context".to_string(), "trace-secret".to_string()));
 
     let events = std::sync::Mutex::new(Vec::<String>::new());
     let messages = build_prompt_messages(AiAction::Explain, "hello world");
@@ -445,8 +560,40 @@ async fn stream_chat_failure_emits_error_then_done_without_leaking_secret() {
     assert!(events[0].contains("HTTP 401"));
     assert!(events[0].contains("[redacted]"));
     assert!(!events[0].contains("dummy-api-key"));
+    assert!(!events[0].contains("base-header-secret"));
     assert!(!events[0].contains("header-secret"));
+    assert!(!events[0].contains("trace-secret"));
     assert_eq!(events[1], "done:request-1");
+}
+
+#[tokio::test]
+async fn list_provider_models_for_update_resolves_saved_api_key_and_custom_headers() {
+    let _guard = provider_test_lock().await;
+    let base_url =
+        spawn_models_server("HTTP/1.1 200 OK", r#"{"data":[{"id":"gpt-saved-secret"}]}"#);
+    let state = state_with_saved_provider();
+
+    let models = list_provider_models_for_update(&state, provider_update(base_url))
+        .await
+        .expect("models helper should resolve saved provider secrets");
+
+    assert_eq!(models, vec!["gpt-saved-secret".to_string()]);
+}
+
+#[tokio::test]
+async fn test_provider_connection_for_update_resolves_saved_api_key_and_custom_headers() {
+    let _guard = provider_test_lock().await;
+    let base_url =
+        spawn_models_server("HTTP/1.1 200 OK", r#"{"data":[{"id":"gpt-saved-secret"}]}"#);
+    let state = state_with_saved_provider();
+
+    let result = test_provider_connection_for_update(&state, provider_update(base_url))
+        .await
+        .expect("connection helper should resolve saved provider secrets");
+
+    assert!(result.success);
+    assert_eq!(result.model_count, 1);
+    assert!(result.model_list_available);
 }
 
 #[tokio::test]
@@ -457,7 +604,7 @@ async fn list_provider_models_returns_model_ids_from_openai_compatible_endpoint(
         r#"{"data":[{"id":"gpt-test"},{"id":"gpt-next"}]}"#,
     );
 
-    let models = list_provider_models(provider(base_url, "dummy-api-key"))
+    let models = list_provider_models_for_provider(provider(base_url, "dummy-api-key"))
         .await
         .expect("models should load");
 
@@ -469,7 +616,7 @@ async fn test_provider_connection_reports_model_count() {
     let _guard = provider_test_lock().await;
     let base_url = spawn_models_server("HTTP/1.1 200 OK", r#"{"data":[{"id":"gpt-test"}]}"#);
 
-    let result = test_provider_connection(provider(base_url, "dummy-api-key"))
+    let result = test_provider_connection_for_provider(provider(base_url, "dummy-api-key"))
         .await
         .expect("connection should succeed");
 
@@ -483,14 +630,17 @@ async fn list_provider_models_surfaces_provider_error_body_without_leaking_secre
     let _guard = provider_test_lock().await;
     let base_url = spawn_models_server(
         "HTTP/1.1 401 Unauthorized",
-        r#"{"error":{"message":"invalid API key dummy-api-key header-secret"}}"#,
+        r#"{"error":{"message":"invalid API key dummy-api-key base-header-secret header-secret trace-secret"}}"#,
     );
     let mut provider = provider(base_url, "dummy-api-key");
     provider
         .headers
         .push(("X-API-Key".to_string(), "header-secret".to_string()));
+    provider
+        .headers
+        .push(("X-Trace-Context".to_string(), "trace-secret".to_string()));
 
-    let err = list_provider_models(provider)
+    let err = list_provider_models_for_provider(provider)
         .await
         .expect_err("provider error should fail");
 
@@ -499,14 +649,16 @@ async fn list_provider_models_surfaces_provider_error_body_without_leaking_secre
     assert!(err.message.contains("invalid API key"));
     assert!(err.message.contains("[redacted]"));
     assert!(!err.message.contains("dummy-api-key"));
+    assert!(!err.message.contains("base-header-secret"));
     assert!(!err.message.contains("header-secret"));
+    assert!(!err.message.contains("trace-secret"));
 }
 
 #[tokio::test]
 async fn list_provider_models_rejects_missing_api_key_without_leaking_secret() {
     let _guard = provider_test_lock().await;
     let _env_guard = EnvVarGuard::remove("SELECTION_AI_API_KEY");
-    let err = list_provider_models(provider("http://127.0.0.1:1/v1".to_string(), ""))
+    let err = list_provider_models_for_provider(provider("http://127.0.0.1:1/v1".to_string(), ""))
         .await
         .expect_err("missing key should fail");
 

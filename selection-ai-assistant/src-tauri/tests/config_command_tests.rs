@@ -1,11 +1,13 @@
 use selection_ai_assistant_lib::app_state::AppState;
 use selection_ai_assistant_lib::commands::config::{
-    get_config_from_state, save_app_behavior_config_in_state, save_provider_config_in_state,
+    get_config_from_state, get_runtime_preferences_from_state, get_settings_config_from_state,
+    save_app_behavior_config_in_state, save_provider_config_in_state,
+    save_provider_update_in_state,
 };
 use selection_ai_assistant_lib::commands::selection::validate_replacement_text;
 use selection_ai_assistant_lib::config::{
     AiProviderConfig, AiProviderKind, AppBehaviorConfig, AppConfig, CloseButtonBehavior,
-    ReplacementTargetLanguage,
+    ProviderUpdate, ReplacementTargetLanguage, SecretUpdate,
 };
 
 fn provider(id: &str, base_url: &str, model: &str) -> AiProviderConfig {
@@ -19,6 +21,144 @@ fn provider(id: &str, base_url: &str, model: &str) -> AiProviderConfig {
         api_key_ref: format!("credential://{id}"),
         headers: Vec::new(),
     }
+}
+
+fn provider_update(
+    original_provider_id: Option<&str>,
+    id: &str,
+    api_key: SecretUpdate,
+) -> ProviderUpdate {
+    ProviderUpdate {
+        original_provider_id: original_provider_id.map(ToString::to_string),
+        id: id.to_string(),
+        name: "Updated Provider".to_string(),
+        base_url: "https://example.com/v1".to_string(),
+        model: "updated-model".to_string(),
+        provider_kind: AiProviderKind::OpenAiCompatible,
+        api_key,
+        api_key_ref: format!("credential://{id}"),
+    }
+}
+
+#[test]
+fn settings_and_runtime_views_do_not_serialize_provider_secrets() {
+    let mut saved_provider = provider("openai", "https://api.openai.com/v1", "gpt-test");
+    saved_provider.api_key = "saved-api-key-secret".to_string();
+    saved_provider.headers = vec![
+        (
+            "X-Trace-Context".to_string(),
+            "trace-header-secret".to_string(),
+        ),
+        ("X-Tenant".to_string(), "tenant-header-secret".to_string()),
+    ];
+    let config = AppConfig {
+        default_provider_id: Some("openai".to_string()),
+        providers: vec![saved_provider],
+        ..AppConfig::default()
+    };
+    let state = AppState::new(config);
+
+    let settings = get_settings_config_from_state(&state).expect("settings view should load");
+    let runtime =
+        get_runtime_preferences_from_state(&state).expect("runtime preferences should load");
+    let settings_json = serde_json::to_string(&settings).expect("settings view should serialize");
+    let runtime_json = serde_json::to_string(&runtime).expect("runtime view should serialize");
+
+    assert!(settings.providers[0].api_key_configured);
+    assert!(settings.providers[0].custom_headers_configured);
+    for serialized in [&settings_json, &runtime_json] {
+        assert!(!serialized.contains("saved-api-key-secret"));
+        assert!(!serialized.contains("trace-header-secret"));
+        assert!(!serialized.contains("tenant-header-secret"));
+        assert!(!serialized.contains("\"apiKey\":"));
+        assert!(!serialized.contains("\"headers\":"));
+    }
+}
+
+#[test]
+fn provider_update_resolves_secret_keep_replace_and_clear() {
+    let mut saved_provider = provider("openai", "https://api.openai.com/v1", "gpt-test");
+    saved_provider.api_key = "saved-api-key".to_string();
+    let config = AppConfig {
+        providers: vec![saved_provider],
+        ..AppConfig::default()
+    };
+
+    let kept = provider_update(Some("openai"), "openai", SecretUpdate::Keep).resolve(&config);
+    let replaced = provider_update(
+        Some("openai"),
+        "openai",
+        SecretUpdate::Replace {
+            value: "replacement-api-key".to_string(),
+        },
+    )
+    .resolve(&config);
+    let cleared = provider_update(Some("openai"), "openai", SecretUpdate::Clear).resolve(&config);
+
+    assert_eq!(kept.api_key, "saved-api-key");
+    assert_eq!(replaced.api_key, "replacement-api-key");
+    assert_eq!(cleared.api_key, "");
+}
+
+#[test]
+fn provider_update_preserves_existing_custom_headers() {
+    let mut saved_provider = provider("openai", "https://api.openai.com/v1", "gpt-test");
+    saved_provider.headers = vec![
+        (
+            "X-Trace-Context".to_string(),
+            "trace-header-value".to_string(),
+        ),
+        ("X-Tenant".to_string(), "tenant-header-value".to_string()),
+    ];
+    let expected_headers = saved_provider.headers.clone();
+    let config = AppConfig {
+        providers: vec![saved_provider],
+        ..AppConfig::default()
+    };
+
+    let resolved = provider_update(
+        Some("openai"),
+        "openai",
+        SecretUpdate::Replace {
+            value: "new-api-key".to_string(),
+        },
+    )
+    .resolve(&config);
+
+    assert_eq!(resolved.headers, expected_headers);
+}
+
+#[test]
+fn save_provider_update_uses_original_provider_id_when_renaming() {
+    let mut saved_provider = provider("old-id", "https://old.example/v1", "old-model");
+    saved_provider.api_key = "saved-api-key".to_string();
+    saved_provider.headers = vec![(
+        "X-Trace-Context".to_string(),
+        "saved-header-value".to_string(),
+    )];
+    let state = AppState::new(AppConfig {
+        default_provider_id: Some("old-id".to_string()),
+        providers: vec![saved_provider],
+        ..AppConfig::default()
+    });
+
+    let config = save_provider_update_in_state(
+        &state,
+        provider_update(Some("old-id"), "new-id", SecretUpdate::Keep),
+    )
+    .expect("renamed provider should save");
+
+    assert_eq!(config.providers.len(), 1);
+    assert_eq!(config.providers[0].id, "new-id");
+    assert_eq!(config.providers[0].api_key, "saved-api-key");
+    assert_eq!(
+        config.providers[0].headers,
+        vec![(
+            "X-Trace-Context".to_string(),
+            "saved-header-value".to_string()
+        )]
+    );
+    assert_eq!(config.default_provider_id.as_deref(), Some("new-id"));
 }
 
 #[test]
