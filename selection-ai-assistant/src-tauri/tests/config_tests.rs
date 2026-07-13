@@ -3,15 +3,46 @@ use selection_ai_assistant_lib::config::{
 };
 
 #[test]
-fn release_binary_uses_windows_subsystem_to_avoid_console_window() {
+fn replacement_preset_window_shows_without_stealing_focus_on_windows() {
+    let panel_rs_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("src")
+        .join("commands")
+        .join("panel.rs");
+    let panel_rs = std::fs::read_to_string(panel_rs_path).expect("panel.rs should load");
+
+    assert!(
+        panel_rs.contains("SW_SHOWNOACTIVATE")
+            && panel_rs.contains("SW_HIDE")
+            && panel_rs.contains("show_replacement_preset_without_activation(&window)")
+            && panel_rs.contains("hide_replacement_preset_window(&window)")
+            && panel_rs.contains("target_preset_panel_hidden")
+            && panel_rs.contains("if !floating.is_visible().unwrap_or(false)"),
+        "the target preset window must not steal focus or survive after the mini action bar is hidden"
+    );
+}
+
+#[test]
+fn plain_release_build_defaults_to_embedded_custom_protocol() {
+    let cargo_toml_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
+    let cargo_toml = std::fs::read_to_string(cargo_toml_path).expect("Cargo.toml should load");
+
+    assert!(
+        cargo_toml.contains("default = [\"custom-protocol\"]")
+            && cargo_toml.contains("custom-protocol = [\"tauri/custom-protocol\"]"),
+        "plain release builds should embed frontend assets instead of loading the localhost dev URL"
+    );
+}
+
+#[test]
+fn all_windows_binaries_use_gui_subsystem_to_avoid_console_window() {
     let main_rs_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("src")
         .join("main.rs");
     let main_rs = std::fs::read_to_string(main_rs_path).expect("main.rs should load");
 
     assert!(
-        main_rs.contains("windows_subsystem = \"windows\""),
-        "release Windows builds should not open an extra console window next to the app"
+        main_rs.contains("cfg_attr(target_os = \"windows\", windows_subsystem = \"windows\")"),
+        "Windows debug and release builds should not open an extra console window next to the app"
     );
 }
 
@@ -28,7 +59,7 @@ fn overlay_windows_have_tauri_capability_permissions() {
         .as_array()
         .expect("capability windows should be an array");
 
-    for label in ["source-text", "translate-result"] {
+    for label in ["source-text", "translate-result", "screenshot-overlay"] {
         assert!(
             windows.iter().any(|window| window.as_str() == Some(label)),
             "{label} window needs capability access to listen for events and invoke window commands"
@@ -85,6 +116,7 @@ fn default_config_contains_privacy_defaults() {
     assert!(config.show_clipboard_privacy_warning_on_first_use);
     assert!(config.disable_in_elevated_windows);
     assert!(config.manual_hotkey_always_enabled);
+    assert!(!config.launch_at_startup);
     assert!(!config.start_minimized_to_tray);
     assert_eq!(config.close_button_behavior, CloseButtonBehavior::Ask);
     assert_eq!(
@@ -92,6 +124,11 @@ fn default_config_contains_privacy_defaults() {
         ReplacementTargetLanguage::Auto
     );
     assert_eq!(config.replacement_custom_target, "");
+    assert_eq!(
+        config.translation_target_language,
+        ReplacementTargetLanguage::Auto
+    );
+    assert_eq!(config.translation_custom_target, "");
     assert!(config.is_disabled_process("Bitwarden.exe"));
     assert!(config.is_disabled_process("bitwarden.exe"));
 }
@@ -123,6 +160,7 @@ fn settings_schema_defaults_missing_fields_for_backward_compatibility() {
     assert_eq!(config.hotkey, AppConfig::default().hotkey);
     assert!(config.clipboard_fallback_enabled);
     assert!(config.manual_hotkey_always_enabled);
+    assert!(!config.launch_at_startup);
     assert!(!config.start_minimized_to_tray);
     assert_eq!(config.close_button_behavior, CloseButtonBehavior::Ask);
     assert_eq!(
@@ -130,4 +168,9 @@ fn settings_schema_defaults_missing_fields_for_backward_compatibility() {
         ReplacementTargetLanguage::Auto
     );
     assert_eq!(config.replacement_custom_target, "");
+    assert_eq!(
+        config.translation_target_language,
+        ReplacementTargetLanguage::Auto
+    );
+    assert_eq!(config.translation_custom_target, "");
 }

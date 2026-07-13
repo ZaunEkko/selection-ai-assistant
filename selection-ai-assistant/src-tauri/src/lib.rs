@@ -11,11 +11,16 @@ pub mod selection;
 pub mod types;
 
 use app_state::AppState;
+use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .manage(AppState::load_or_default())
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            Some(vec![app_lifecycle::AUTOSTART_ARG]),
+        ))
         .invoke_handler(tauri::generate_handler![
             commands::config::get_config,
             commands::config::save_app_behavior_config,
@@ -26,6 +31,8 @@ pub fn run() {
             commands::panel::show_floating_button,
             commands::panel::hide_floating_button,
             commands::panel::show_replacement_preset_panel,
+            commands::panel::set_replacement_preset_panel_expanded,
+            commands::panel::focus_floating_button,
             commands::panel::hide_replacement_preset_panel,
             commands::panel::show_ai_panel,
             commands::panel::hide_ai_panel,
@@ -34,6 +41,9 @@ pub fn run() {
             commands::panel::hide_source_text_window,
             commands::panel::show_translate_result,
             commands::panel::hide_translate_result,
+            commands::screenshot::show_screenshot_overlay,
+            commands::screenshot::cancel_screenshot_translate,
+            commands::screenshot::run_screenshot_translate,
             commands::platform::get_platform_capabilities,
             commands::selection::open_panel_for_text,
             commands::selection::get_latest_panel_context,
@@ -46,6 +56,9 @@ pub fn run() {
             commands::ai::test_provider_connection,
         ])
         .setup(|app| {
+            if let Some(state) = app.try_state::<AppState>() {
+                commands::config::refresh_launch_at_startup_registration(app.handle(), &state);
+            }
             app_lifecycle::setup_background_lifecycle(app)?;
             app_lifecycle::apply_startup_visibility(app)?;
             input_monitor::start_background_monitor(app.handle().clone());
