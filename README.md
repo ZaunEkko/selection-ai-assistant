@@ -145,7 +145,7 @@ RustSec 检查需要先安装 [`cargo-audit`](https://github.com/rustsec/rustsec
 cargo audit --no-yanked
 ```
 
-CI 在 Windows 上执行前端测试、构建、npm audit、Rust fmt/check/test、Rust 1.88 MSRV 检查和 cargo audit。
+CI 在产品代码、依赖或 workflow 变更时执行前端测试、构建、npm audit、Rust fmt/check/test、Rust 1.88 MSRV 检查和 cargo audit；纯文档与仓库治理改动只运行快速范围检查和 required check 占位任务。
 
 ## 项目结构
 
