@@ -19,18 +19,66 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  scope:
+    name: Determine CI scope
+    runs-on: ubuntu-latest
+    outputs:
+      run_full: ${{ steps.scope.outputs.run_full }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Detect product or CI changes
+        id: scope
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BEFORE_SHA: ${{ github.event.before }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if [[ "$EVENT_NAME" == "pull_request" ]]; then
+            base="$BASE_SHA"
+          else
+            base="$BEFORE_SHA"
+          fi
+
+          if [[ -z "$base" || "$base" =~ ^0+$ ]]; then
+            echo "run_full=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if git diff --quiet "$base" "$GITHUB_SHA" -- selection-ai-assistant/ .github/workflows/ci.yml; then
+            echo "run_full=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "run_full=true" >> "$GITHUB_OUTPUT"
+          fi
+
   quality:
     name: Windows quality gate
+    needs: scope
+    if: ${{ always() }}
     runs-on: windows-latest
     timeout-minutes: 45
     defaults:
       run:
         shell: bash
     steps:
+      - name: Fail when scope detection fails
+        if: ${{ needs.scope.result != 'success' }}
+        run: exit 1
+
+      - name: Skip full checks for documentation-only changes
+        if: ${{ needs.scope.result == 'success' && needs.scope.outputs.run_full != 'true' }}
+        run: echo "No product or CI workflow changes detected; full Windows checks are not required."
+
       - name: Check out repository
+        if: ${{ needs.scope.outputs.run_full == 'true' }}
         uses: actions/checkout@v6
 
       - name: Set up Node.js
+        if: ${{ needs.scope.outputs.run_full == 'true' }}
         uses: actions/setup-node@v6
         with:
           node-version-file: selection-ai-assistant/.node-version
@@ -38,57 +86,89 @@ jobs:
           cache-dependency-path: selection-ai-assistant/package-lock.json
 
       - name: Set up npm 11
+        if: ${{ needs.scope.outputs.run_full == 'true' }}
         run: npm install --global npm@11.17.0
 
       - name: Set up stable Rust
+        if: ${{ needs.scope.outputs.run_full == 'true' }}
         uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt
 
       - name: Install frontend dependencies
+        if: ${{ needs.scope.outputs.run_full == 'true' }}
         working-directory: selection-ai-assistant
         run: npm ci
 
       - name: Audit npm dependencies
+        if: ${{ needs.scope.outputs.run_full == 'true' }}
         working-directory: selection-ai-assistant
         run: npm audit --audit-level=high
 
       - name: Run frontend tests
+        if: ${{ needs.scope.outputs.run_full == 'true' }}
         working-directory: selection-ai-assistant
         run: npm test
 
       - name: Build frontend
+        if: ${{ needs.scope.outputs.run_full == 'true' }}
         working-directory: selection-ai-assistant
         run: npm run build
 
       - name: Check Rust formatting
+        if: ${{ needs.scope.outputs.run_full == 'true' }}
         run: cargo fmt --manifest-path selection-ai-assistant/src-tauri/Cargo.toml --check
 
       - name: Check Rust project
+        if: ${{ needs.scope.outputs.run_full == 'true' }}
         run: cargo check --manifest-path selection-ai-assistant/src-tauri/Cargo.toml --locked --jobs 1
 
       - name: Run Rust tests
+        if: ${{ needs.scope.outputs.run_full == 'true' }}
         run: cargo test --manifest-path selection-ai-assistant/src-tauri/Cargo.toml --locked --jobs 1
 
+      - name: Restore cargo-audit
+        if: ${{ needs.scope.outputs.run_full == 'true' }}
+        id: cargo-audit-cache
+        uses: actions/cache@v5
+        with:
+          path: ~/.cargo/bin/cargo-audit.exe
+          key: cargo-audit-0.22.2-${{ runner.os }}
+
       - name: Install cargo-audit
+        if: ${{ needs.scope.outputs.run_full == 'true' && steps.cargo-audit-cache.outputs.cache-hit != 'true' }}
         run: cargo install cargo-audit --locked --version 0.22.2
 
       - name: Audit Rust dependencies
+        if: ${{ needs.scope.outputs.run_full == 'true' }}
         run: cargo audit --no-yanked --file selection-ai-assistant/src-tauri/Cargo.lock
 
   msrv:
     name: Rust 1.88 compatibility
+    needs: scope
+    if: ${{ always() }}
     runs-on: windows-latest
     timeout-minutes: 30
     defaults:
       run:
         shell: bash
     steps:
+      - name: Fail when scope detection fails
+        if: ${{ needs.scope.result != 'success' }}
+        run: exit 1
+
+      - name: Skip full checks for documentation-only changes
+        if: ${{ needs.scope.result == 'success' && needs.scope.outputs.run_full != 'true' }}
+        run: echo "No product or CI workflow changes detected; the MSRV check is not required."
+
       - name: Check out repository
+        if: ${{ needs.scope.outputs.run_full == 'true' }}
         uses: actions/checkout@v6
 
       - name: Set up Rust 1.88
+        if: ${{ needs.scope.outputs.run_full == 'true' }}
         uses: dtolnay/rust-toolchain@1.88.0
 
       - name: Check declared MSRV
+        if: ${{ needs.scope.outputs.run_full == 'true' }}
         run: cargo check --manifest-path selection-ai-assistant/src-tauri/Cargo.toml --locked --no-default-features --jobs 1

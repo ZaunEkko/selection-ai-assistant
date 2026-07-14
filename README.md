@@ -1,28 +1,36 @@
 # Selection AI Assistant
 
 <p align="center">
-  <strong>Windows 桌面 AI 划词助手</strong><br />
-  选中文本后，通过悬浮操作条快速翻译、替换、解释、总结代码或分析报错。
+  <strong>Windows 桌面 AI 划词与截图翻译助手</strong><br />
+  选中文本或框选屏幕区域，即可快速翻译、替换、解释、总结、分析代码与报错，并继续流式追问。
 </p>
 
 <p align="center">
   <a href="https://github.com/ZaunEkko/selection-ai-assistant/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/ZaunEkko/selection-ai-assistant/actions/workflows/ci.yml/badge.svg" /></a>
+  <a href="https://github.com/ZaunEkko/selection-ai-assistant/releases/latest"><img alt="Latest Release" src="https://img.shields.io/github/v/release/ZaunEkko/selection-ai-assistant" /></a>
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/License-MIT-blue.svg" /></a>
   <img alt="Platform: Windows 11" src="https://img.shields.io/badge/Platform-Windows%2011-0078D4" />
 </p>
 
 > 当前开发线为 **v0.3.x**。Windows 11 是正式支持的平台；macOS 和 Linux 目前只有能力探测与 backend stub，不支持完整的系统级自动划词。
 
-## 功能
+## 核心能力
 
-- Windows 低层鼠标监听、UI Automation 选区读取与悬浮操作条
-- 翻译并替换、仅翻译、解释、总结、代码解释、报错解释和提示词扩写
-- OpenAI-compatible、Anthropic Messages API、Gemini Generative Language API
-- 流式响应、追问、原文窗口和翻译结果浮窗
-- 截图翻译：显式热键打开取景层，手动框选后发送给视觉模型
-- Provider 预设、模型加载、连接测试和环境变量 fallback
-- 开机自启、后台启动、托盘驻留和关闭行为设置
-- Tauri 窗口级 capability、命令调用方校验与生产 CSP
+| 场景 | 操作方式 | 可以做什么 |
+|---|---|---|
+| 文本划词 | 拖拽选中文本，将鼠标移到选区中心或 anchor 附近 | 翻译、替换、解释、总结、代码解释、报错分析、提示词扩写 |
+| 截图翻译 | 使用可配置热键打开全屏取景层，拖拽框选区域并确认 | 识别图片、视频字幕、扫描文档或不可选中界面中的文字并翻译 |
+| AI 面板 | 从悬浮操作条打开面板 | 查看流式回答、继续追问，并联动查看原文窗口 |
+| 翻译结果浮窗 | 选择“仅翻译”或执行截图翻译 | 在独立可拖动、可缩放窗口中查看结果 |
+
+- **系统级划词交互**：Windows 低层鼠标监听结合 UI Automation 读取选区，悬浮操作条不会在完成选择后立即打断操作。
+- **截图翻译**：显式热键打开取景层，支持确认执行和 `Esc` 取消，适合处理无法直接复制的屏幕文字。
+- **替换与翻译预设**：替换可一键执行；二级预设面板用于切换并持久化后续会话的输出方向。
+- **多种 AI 动作**：翻译并替换、仅翻译、解释、总结、代码解释、报错解释和提示词扩写。
+- **多 Provider 协议**：支持 OpenAI-compatible、Anthropic Messages API 和 Gemini Generative Language API。
+- **完整桌面体验**：流式响应、追问、原文窗口、翻译结果浮窗、托盘驻留、开机自启和后台启动。
+- **Provider 管理**：内置常用厂商预设，支持模型加载、连接测试和 `SELECTION_AI_API_KEY` 环境变量 fallback。
+- **桌面安全边界**：按窗口拆分 Tauri capability，校验命令调用方，并启用生产 CSP。
 
 ## 隐私与安全边界
 
@@ -42,9 +50,10 @@
 
 | 文件 | 用途 |
 |---|---|
-| `Selection AI Assistant_*_x64-setup.exe` | 推荐给普通用户的 NSIS 安装器 |
-| `Selection AI Assistant_*_x64_en-US.msi` | 适合 Windows Installer / 统一部署环境 |
-| `selection-ai-assistant.exe` | 便携验证或开发用途 |
+| `Selection-AI-Assistant_*_x64-setup.exe` | 推荐给普通用户的 NSIS 安装器 |
+| `Selection-AI-Assistant_*_x64_en-US.msi` | 适合 Windows Installer / 统一部署环境 |
+| `Selection-AI-Assistant_*_x64.exe` | 无需安装的独立可执行文件 |
+| `SHA256SUMS.txt` | 下载文件的 SHA-256 校验值 |
 
 安装后打开设置页，选择 provider、填写 Base URL / 模型 / API key，并使用“加载模型”或“测试连接”确认配置。
 
@@ -69,7 +78,21 @@ SELECTION_AI_API_KEY
 
 ### 截图翻译
 
-按设置中的截图翻译热键，拖拽框选不可选中的文字区域，确认后由 OpenAI-compatible 视觉模型识别并翻译。
+截图翻译适合图片文字、视频字幕、扫描文档、远程桌面和其他无法直接选中的界面内容：
+
+```text
+按下设置中的截图翻译热键
+  → 全屏取景层出现
+  → 拖拽框选需要识别的区域
+  → 确认后发送给支持图片输入的 OpenAI-compatible 视觉模型
+  → 在翻译结果浮窗中查看结果
+```
+
+框选过程中可以按 `Esc` 取消。截图只会在用户显式打开取景层、完成框选并确认后读取和发送。
+
+### AI 面板与追问
+
+从悬浮操作条选择解释、总结、代码分析等动作后，会打开 AI 面板并流式显示结果。可以继续输入问题追问，也可以打开原文窗口对照选中的文本。
 
 ## 平台支持
 
@@ -122,7 +145,7 @@ RustSec 检查需要先安装 [`cargo-audit`](https://github.com/rustsec/rustsec
 cargo audit --no-yanked
 ```
 
-CI 在 Windows 上执行前端测试、构建、npm audit、Rust fmt/check/test、Rust 1.88 MSRV 检查和 cargo audit。
+CI 在产品代码、依赖或 workflow 变更时执行前端测试、构建、npm audit、Rust fmt/check/test、Rust 1.88 MSRV 检查和 cargo audit；纯文档与仓库治理改动只运行快速范围检查和 required check 占位任务。
 
 ## 项目结构
 
