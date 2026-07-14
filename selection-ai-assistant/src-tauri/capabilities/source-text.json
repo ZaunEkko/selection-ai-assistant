@@ -1,0 +1,13 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "source-text-window",
+  "description": "原文窗口的上下文读取、关闭、事件与拖动权限。",
+  "windows": ["source-text"],
+  "permissions": [
+    "allow-get-latest-source-text-context",
+    "allow-hide-source-text-window",
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "core:window:allow-start-dragging"
+  ]
+}

@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 私密安全报告
+    url: https://github.com/ZaunEkko/selection-ai-assistant/security/advisories/new
+    about: 漏洞、秘密泄露或安全边界绕过请使用私密报告入口。

@@ -50,7 +50,7 @@ use crate::{
     commands::{
         panel::{
             floating_button_position_for_selection, hide_floating_button,
-            hide_replacement_preset_panel, show_floating_button_at_position,
+            hide_replacement_preset_panel_for_app, show_floating_button_at_position,
             show_floating_button_for_selection,
         },
         screenshot::show_screenshot_overlay_for_point,
@@ -304,7 +304,7 @@ fn update_target_controls_pointer_state(
             return;
         }
 
-        let _ = hide_replacement_preset_panel(app);
+        let _ = hide_replacement_preset_panel_for_app(app);
     });
 }
 

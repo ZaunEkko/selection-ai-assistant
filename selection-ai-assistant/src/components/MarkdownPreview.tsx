@@ -14,8 +14,7 @@ function isSafeHttpUrl(url: string) {
   }
 }
 
-function isSafeImageUrl(url: string) {
-  if (isSafeHttpUrl(url)) return true;
+function isAllowedEmbeddedImageUrl(url: string) {
   return /^data:image\/(png|jpeg|jpg|gif|webp);base64,[a-z0-9+/=]+$/i.test(url);
 }
 
@@ -66,18 +65,18 @@ function renderInlineMarkdown(text: string, keyPrefix: string): ReactNode[] {
     const [raw, label, url] = item.match;
     const trimmedUrl = url.trim();
     if (item.type === 'image') {
-      if (isSafeImageUrl(trimmedUrl)) {
+      if (isAllowedEmbeddedImageUrl(trimmedUrl)) {
         nodes.push(<img key={`${keyPrefix}-inline-${nodeIndex}`} src={trimmedUrl} alt={label} loading="lazy" />);
       } else {
         nodes.push(
           <span key={`${keyPrefix}-inline-${nodeIndex}`} className="markdown-hidden-image">
-            已隐藏不安全图片：{label || trimmedUrl}
+            远程图片已阻止{label ? `：${label}` : ''}
           </span>,
         );
       }
     } else if (isSafeHttpUrl(trimmedUrl)) {
       nodes.push(
-        <a key={`${keyPrefix}-inline-${nodeIndex}`} href={trimmedUrl} target="_blank" rel="noreferrer">
+        <a key={`${keyPrefix}-inline-${nodeIndex}`} href={trimmedUrl} target="_blank" rel="noopener noreferrer">
           {renderInlineText(label, `${keyPrefix}-link-${nodeIndex}`)}
         </a>,
       );
