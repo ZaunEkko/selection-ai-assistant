@@ -11,6 +11,7 @@ const {
   openPanelFromFloatingButtonMock,
   runAiActionMock,
   saveAppBehaviorConfigMock,
+  saveOutputTargetPreferencesMock,
   showReplacementPresetPanelMock,
   setReplacementPresetPanelExpandedMock,
   focusFloatingButtonMock,
@@ -33,6 +34,7 @@ const {
   openPanelFromFloatingButtonMock: vi.fn(),
   runAiActionMock: vi.fn(),
   saveAppBehaviorConfigMock: vi.fn(),
+  saveOutputTargetPreferencesMock: vi.fn(),
   showReplacementPresetPanelMock: vi.fn(),
   setReplacementPresetPanelExpandedMock: vi.fn(),
   focusFloatingButtonMock: vi.fn(),
@@ -106,8 +108,21 @@ vi.mock('../api/tauri', () => ({
       disabledApps: [],
     }),
   ),
+  getRuntimePreferences: vi.fn(() =>
+    Promise.resolve({
+      hotkey: 'Ctrl+Alt+A',
+      launchAtStartup: false,
+      startMinimizedToTray: false,
+      closeButtonBehavior: 'ask',
+      replacementTargetLanguage: 'korean',
+      replacementCustomTarget: '',
+      translationTargetLanguage: 'morseCode',
+      translationCustomTarget: '',
+    }),
+  ),
   saveProviderConfig: vi.fn(),
   saveAppBehaviorConfig: saveAppBehaviorConfigMock,
+  saveOutputTargetPreferences: saveOutputTargetPreferencesMock,
   getPlatformCapabilities: vi.fn(() =>
     Promise.resolve({
       platform: 'windows',
@@ -166,6 +181,7 @@ describe('App routing by Tauri window label', () => {
     focusListeners.splice(0);
     runAiActionMock.mockReset();
     saveAppBehaviorConfigMock.mockReset();
+    saveOutputTargetPreferencesMock.mockReset();
     showTranslateResultMock.mockReset();
     showReplacementPresetPanelMock.mockReset();
     setReplacementPresetPanelExpandedMock.mockReset();
@@ -205,6 +221,18 @@ describe('App routing by Tauri window label', () => {
       translationCustomTarget: '',
       disabledApps: [],
     });
+    saveOutputTargetPreferencesMock.mockImplementation(
+      async (kind: 'replacement' | 'translation', targetLanguage: string, customTarget: string) => ({
+        hotkey: 'Ctrl+Alt+A',
+        launchAtStartup: false,
+        startMinimizedToTray: false,
+        closeButtonBehavior: 'ask',
+        replacementTargetLanguage: kind === 'replacement' ? targetLanguage : 'korean',
+        replacementCustomTarget: kind === 'replacement' ? customTarget : '',
+        translationTargetLanguage: kind === 'translation' ? targetLanguage : 'morseCode',
+        translationCustomTarget: kind === 'translation' ? customTarget : '',
+      }),
+    );
     showTranslateResultMock.mockResolvedValue(undefined);
     showReplacementPresetPanelMock.mockResolvedValue(undefined);
     setReplacementPresetPanelExpandedMock.mockResolvedValue(undefined);
@@ -656,30 +684,14 @@ describe('App routing by Tauri window label', () => {
 
   it('saves replacement target from the compact replacement preset window without closing it', async () => {
     currentLabel = 'replacement-preset';
-    saveAppBehaviorConfigMock.mockImplementation(async (preferences) => ({
-      defaultProviderId: null,
-      providers: [],
-      hoverRadius: 90,
-      hoverDelayMs: 220,
-      candidateTimeoutMs: 4000,
-      minDragDistance: 6,
-      launchAtStartup: false,
-      clipboardFallbackEnabled: true,
-      showClipboardPrivacyWarningOnFirstUse: true,
-      disableInElevatedWindows: true,
-      manualHotkeyAlwaysEnabled: true,
-      disabledApps: [],
-      ...preferences,
-    }));
 
     render(<App />);
     fireEvent.click(await screen.findByRole('button', { name: '日文' }));
 
     await waitFor(() =>
-      expect(saveAppBehaviorConfigMock).toHaveBeenCalledWith(
-        expect.objectContaining({ replacementTargetLanguage: 'japanese', replacementCustomTarget: '' }),
-      ),
+      expect(saveOutputTargetPreferencesMock).toHaveBeenCalledWith('replacement', 'japanese', ''),
     );
+    expect(saveAppBehaviorConfigMock).not.toHaveBeenCalled();
     await waitFor(() => expect(focusFloatingButtonMock).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(setReplacementPresetPanelExpandedMock).toHaveBeenLastCalledWith(false));
     expect(hideReplacementPresetPanelMock).not.toHaveBeenCalled();
@@ -687,21 +699,6 @@ describe('App routing by Tauri window label', () => {
 
   it('saves translation target from the shared target preset window without mutating replacement target', async () => {
     currentLabel = 'replacement-preset';
-    saveAppBehaviorConfigMock.mockImplementation(async (preferences) => ({
-      defaultProviderId: null,
-      providers: [],
-      hoverRadius: 90,
-      hoverDelayMs: 220,
-      candidateTimeoutMs: 4000,
-      minDragDistance: 6,
-      launchAtStartup: false,
-      clipboardFallbackEnabled: true,
-      showClipboardPrivacyWarningOnFirstUse: true,
-      disableInElevatedWindows: true,
-      manualHotkeyAlwaysEnabled: true,
-      disabledApps: [],
-      ...preferences,
-    }));
 
     render(<App />);
     await waitFor(() => expect(listeners.has('target_preset_context')).toBe(true));
@@ -711,36 +708,15 @@ describe('App routing by Tauri window label', () => {
     fireEvent.click(await screen.findByRole('button', { name: '甲骨' }));
 
     await waitFor(() =>
-      expect(saveAppBehaviorConfigMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          replacementTargetLanguage: 'korean',
-          replacementCustomTarget: '',
-          translationTargetLanguage: 'oracleBone',
-          translationCustomTarget: '',
-        }),
-      ),
+      expect(saveOutputTargetPreferencesMock).toHaveBeenCalledWith('translation', 'oracleBone', ''),
     );
+    expect(saveAppBehaviorConfigMock).not.toHaveBeenCalled();
     await waitFor(() => expect(focusFloatingButtonMock).toHaveBeenCalledTimes(1));
     expect(hideReplacementPresetPanelMock).not.toHaveBeenCalled();
   });
 
   it('saves custom translation target from the shared target preset window', async () => {
     currentLabel = 'replacement-preset';
-    saveAppBehaviorConfigMock.mockImplementation(async (preferences) => ({
-      defaultProviderId: null,
-      providers: [],
-      hoverRadius: 90,
-      hoverDelayMs: 220,
-      candidateTimeoutMs: 4000,
-      minDragDistance: 6,
-      launchAtStartup: false,
-      clipboardFallbackEnabled: true,
-      showClipboardPrivacyWarningOnFirstUse: true,
-      disableInElevatedWindows: true,
-      manualHotkeyAlwaysEnabled: true,
-      disabledApps: [],
-      ...preferences,
-    }));
 
     render(<App />);
     await waitFor(() => expect(listeners.has('target_preset_context')).toBe(true));
@@ -753,15 +729,13 @@ describe('App routing by Tauri window label', () => {
     fireEvent.click(screen.getByRole('button', { name: '保存' }));
 
     await waitFor(() =>
-      expect(saveAppBehaviorConfigMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          replacementTargetLanguage: 'korean',
-          replacementCustomTarget: '',
-          translationTargetLanguage: 'custom',
-          translationCustomTarget: '象形文字风格',
-        }),
+      expect(saveOutputTargetPreferencesMock).toHaveBeenCalledWith(
+        'translation',
+        'custom',
+        '象形文字风格',
       ),
     );
+    expect(saveAppBehaviorConfigMock).not.toHaveBeenCalled();
     await waitFor(() => expect(focusFloatingButtonMock).toHaveBeenCalledTimes(1));
   });
 

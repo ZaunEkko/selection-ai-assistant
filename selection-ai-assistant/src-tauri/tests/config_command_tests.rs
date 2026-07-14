@@ -1,11 +1,17 @@
 use selection_ai_assistant_lib::app_state::AppState;
-use selection_ai_assistant_lib::commands::config::{
-    get_config_from_state, save_app_behavior_config_in_state, save_provider_config_in_state,
-};
 use selection_ai_assistant_lib::commands::selection::validate_replacement_text;
+use selection_ai_assistant_lib::commands::{
+    access::require_label,
+    config::{
+        get_config_from_state, get_runtime_preferences_from_state, get_settings_config_from_state,
+        save_app_behavior_config_in_state, save_output_target_preferences_in_state,
+        save_provider_config_in_state, save_provider_update_in_state,
+    },
+    panel::TargetPresetKind,
+};
 use selection_ai_assistant_lib::config::{
     AiProviderConfig, AiProviderKind, AppBehaviorConfig, AppConfig, CloseButtonBehavior,
-    ReplacementTargetLanguage,
+    ProviderUpdate, ReplacementTargetLanguage, SecretUpdate,
 };
 
 fn provider(id: &str, base_url: &str, model: &str) -> AiProviderConfig {
@@ -19,6 +25,197 @@ fn provider(id: &str, base_url: &str, model: &str) -> AiProviderConfig {
         api_key_ref: format!("credential://{id}"),
         headers: Vec::new(),
     }
+}
+
+fn provider_update(
+    original_provider_id: Option<&str>,
+    id: &str,
+    api_key: SecretUpdate,
+) -> ProviderUpdate {
+    ProviderUpdate {
+        original_provider_id: original_provider_id.map(ToString::to_string),
+        id: id.to_string(),
+        name: "Updated Provider".to_string(),
+        base_url: "https://example.com/v1".to_string(),
+        model: "updated-model".to_string(),
+        provider_kind: AiProviderKind::OpenAiCompatible,
+        api_key,
+        api_key_ref: format!("credential://{id}"),
+    }
+}
+
+#[test]
+fn settings_and_runtime_views_do_not_serialize_provider_secrets() {
+    let mut saved_provider = provider("openai", "https://api.openai.com/v1", "gpt-test");
+    saved_provider.api_key = "saved-api-key-secret".to_string();
+    saved_provider.headers = vec![
+        (
+            "X-Trace-Context".to_string(),
+            "trace-header-secret".to_string(),
+        ),
+        ("X-Tenant".to_string(), "tenant-header-secret".to_string()),
+    ];
+    let config = AppConfig {
+        default_provider_id: Some("openai".to_string()),
+        providers: vec![saved_provider],
+        ..AppConfig::default()
+    };
+    let state = AppState::new(config);
+
+    let settings = get_settings_config_from_state(&state).expect("settings view should load");
+    let runtime =
+        get_runtime_preferences_from_state(&state).expect("runtime preferences should load");
+    let settings_json = serde_json::to_string(&settings).expect("settings view should serialize");
+    let runtime_json = serde_json::to_string(&runtime).expect("runtime view should serialize");
+
+    assert!(settings.providers[0].api_key_configured);
+    assert!(settings.providers[0].custom_headers_configured);
+    for serialized in [&settings_json, &runtime_json] {
+        assert!(!serialized.contains("saved-api-key-secret"));
+        assert!(!serialized.contains("trace-header-secret"));
+        assert!(!serialized.contains("tenant-header-secret"));
+        assert!(!serialized.contains("\"apiKey\":"));
+        assert!(!serialized.contains("\"headers\":"));
+    }
+}
+
+#[test]
+fn provider_update_resolves_secret_keep_replace_and_clear() {
+    let mut saved_provider = provider("openai", "https://api.openai.com/v1", "gpt-test");
+    saved_provider.api_key = "saved-api-key".to_string();
+    let config = AppConfig {
+        providers: vec![saved_provider],
+        ..AppConfig::default()
+    };
+
+    let kept = provider_update(Some("openai"), "openai", SecretUpdate::Keep).resolve(&config);
+    let replaced = provider_update(
+        Some("openai"),
+        "openai",
+        SecretUpdate::Replace {
+            value: "replacement-api-key".to_string(),
+        },
+    )
+    .resolve(&config);
+    let cleared = provider_update(Some("openai"), "openai", SecretUpdate::Clear).resolve(&config);
+
+    assert_eq!(kept.api_key, "saved-api-key");
+    assert_eq!(replaced.api_key, "replacement-api-key");
+    assert_eq!(cleared.api_key, "");
+}
+
+#[test]
+fn provider_update_preserves_existing_custom_headers() {
+    let mut saved_provider = provider("openai", "https://api.openai.com/v1", "gpt-test");
+    saved_provider.headers = vec![
+        (
+            "X-Trace-Context".to_string(),
+            "trace-header-value".to_string(),
+        ),
+        ("X-Tenant".to_string(), "tenant-header-value".to_string()),
+    ];
+    let expected_headers = saved_provider.headers.clone();
+    let config = AppConfig {
+        providers: vec![saved_provider],
+        ..AppConfig::default()
+    };
+
+    let resolved = provider_update(
+        Some("openai"),
+        "openai",
+        SecretUpdate::Replace {
+            value: "new-api-key".to_string(),
+        },
+    )
+    .resolve(&config);
+
+    assert_eq!(resolved.headers, expected_headers);
+}
+
+#[test]
+fn save_provider_update_uses_original_provider_id_when_renaming() {
+    let mut saved_provider = provider("old-id", "https://old.example/v1", "old-model");
+    saved_provider.api_key = "saved-api-key".to_string();
+    saved_provider.headers = vec![(
+        "X-Trace-Context".to_string(),
+        "saved-header-value".to_string(),
+    )];
+    let state = AppState::new(AppConfig {
+        default_provider_id: Some("old-id".to_string()),
+        providers: vec![saved_provider],
+        ..AppConfig::default()
+    });
+
+    let config = save_provider_update_in_state(
+        &state,
+        provider_update(Some("old-id"), "new-id", SecretUpdate::Keep),
+    )
+    .expect("renamed provider should save");
+
+    assert_eq!(config.providers.len(), 1);
+    assert_eq!(config.providers[0].id, "new-id");
+    assert_eq!(config.providers[0].api_key, "saved-api-key");
+    assert_eq!(
+        config.providers[0].headers,
+        vec![(
+            "X-Trace-Context".to_string(),
+            "saved-header-value".to_string()
+        )]
+    );
+    assert_eq!(config.default_provider_id.as_deref(), Some("new-id"));
+}
+
+#[test]
+fn save_provider_update_rejects_renaming_to_existing_id() {
+    let state = AppState::new(AppConfig {
+        default_provider_id: Some("old-id".to_string()),
+        providers: vec![
+            provider("old-id", "https://old.example/v1", "old-model"),
+            provider(
+                "existing-id",
+                "https://existing.example/v1",
+                "existing-model",
+            ),
+        ],
+        ..AppConfig::default()
+    });
+
+    let err = save_provider_update_in_state(
+        &state,
+        provider_update(Some("old-id"), "existing-id", SecretUpdate::Keep),
+    )
+    .expect_err("renaming to an existing provider id should fail");
+
+    assert_eq!(err.code, "provider_id_conflict");
+    let config = get_config_from_state(&state).expect("config should remain readable");
+    assert_eq!(config.default_provider_id.as_deref(), Some("old-id"));
+    assert_eq!(config.providers.len(), 2);
+    assert_eq!(config.providers[0].id, "old-id");
+    assert_eq!(config.providers[1].id, "existing-id");
+}
+
+#[test]
+fn save_provider_update_rejects_duplicate_new_provider_id() {
+    let state = AppState::new(AppConfig {
+        default_provider_id: Some("existing-id".to_string()),
+        providers: vec![provider(
+            "existing-id",
+            "https://existing.example/v1",
+            "existing-model",
+        )],
+        ..AppConfig::default()
+    });
+
+    let err = save_provider_update_in_state(
+        &state,
+        provider_update(None, "existing-id", SecretUpdate::Keep),
+    )
+    .expect_err("new provider should not reuse an existing provider id");
+
+    assert_eq!(err.code, "provider_id_conflict");
+    let config = get_config_from_state(&state).expect("config should remain readable");
+    assert_eq!(config.providers.len(), 1);
+    assert_eq!(config.providers[0].model, "existing-model");
 }
 
 #[test]
@@ -117,6 +314,114 @@ fn save_app_behavior_config_persists_to_settings_file() {
         ReplacementTargetLanguage::Custom
     );
     assert_eq!(loaded.translation_custom_target, "象形文字");
+}
+
+#[test]
+fn command_window_guard_accepts_only_expected_labels() {
+    assert!(require_label("main", &["main"]).is_ok());
+    assert!(require_label("ai-panel", &["floating-button", "ai-panel"]).is_ok());
+
+    let err = require_label("screenshot-overlay", &["main"])
+        .expect_err("unexpected window should be rejected");
+    assert_eq!(err.code, "command_window_unauthorized");
+    assert!(err.message.contains("screenshot-overlay"));
+}
+
+#[test]
+fn save_output_target_preferences_updates_only_requested_target() {
+    let initial = AppConfig {
+        replacement_target_language: ReplacementTargetLanguage::Korean,
+        replacement_custom_target: "韩语敬语".to_string(),
+        translation_target_language: ReplacementTargetLanguage::English,
+        translation_custom_target: "keep translation custom".to_string(),
+        ..AppConfig::default()
+    };
+    let state = AppState::new(initial);
+
+    let replacement = save_output_target_preferences_in_state(
+        &state,
+        TargetPresetKind::Replacement,
+        ReplacementTargetLanguage::Japanese,
+        "日文自然口语".to_string(),
+    )
+    .expect("replacement target should save");
+    assert_eq!(
+        replacement.replacement_target_language,
+        ReplacementTargetLanguage::Japanese
+    );
+    assert_eq!(replacement.replacement_custom_target, "日文自然口语");
+    assert_eq!(
+        replacement.translation_target_language,
+        ReplacementTargetLanguage::English
+    );
+    assert_eq!(
+        replacement.translation_custom_target,
+        "keep translation custom"
+    );
+
+    let translation = save_output_target_preferences_in_state(
+        &state,
+        TargetPresetKind::Translation,
+        ReplacementTargetLanguage::MorseCode,
+        "摩斯密码".to_string(),
+    )
+    .expect("translation target should save");
+    assert_eq!(
+        translation.replacement_target_language,
+        ReplacementTargetLanguage::Japanese
+    );
+    assert_eq!(translation.replacement_custom_target, "日文自然口语");
+    assert_eq!(
+        translation.translation_target_language,
+        ReplacementTargetLanguage::MorseCode
+    );
+    assert_eq!(translation.translation_custom_target, "摩斯密码");
+}
+
+#[test]
+fn save_output_target_preferences_rejects_empty_custom_target() {
+    let state = AppState::new(AppConfig::default());
+
+    let err = save_output_target_preferences_in_state(
+        &state,
+        TargetPresetKind::Replacement,
+        ReplacementTargetLanguage::Custom,
+        "   ".to_string(),
+    )
+    .expect_err("empty custom output target should fail");
+
+    assert_eq!(err.code, "output_target_required");
+    let stored = get_config_from_state(&state).expect("config should remain readable");
+    assert_eq!(
+        stored.replacement_target_language,
+        ReplacementTargetLanguage::Auto
+    );
+}
+
+#[test]
+fn save_output_target_preferences_persists_to_settings_file() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let path = dir.path().join("settings.json");
+    let state = AppState::new_with_settings_path(AppConfig::default(), path.clone());
+
+    save_output_target_preferences_in_state(
+        &state,
+        TargetPresetKind::Translation,
+        ReplacementTargetLanguage::Custom,
+        "象形文字风格".to_string(),
+    )
+    .expect("output target should persist");
+
+    let loaded = AppConfig::load_from_path(&path).expect("settings should load from disk");
+    assert_eq!(
+        loaded.translation_target_language,
+        ReplacementTargetLanguage::Custom
+    );
+    assert_eq!(loaded.translation_custom_target, "象形文字风格");
+    assert_eq!(
+        loaded.replacement_target_language,
+        ReplacementTargetLanguage::Auto
+    );
 }
 
 #[test]

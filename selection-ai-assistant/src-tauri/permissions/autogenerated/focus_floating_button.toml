@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-focus-floating-button"
+description = "Enables the focus_floating_button command without any pre-configured scope."
+commands.allow = ["focus_floating_button"]
+
+[[permission]]
+identifier = "deny-focus-floating-button"
+description = "Denies the focus_floating_button command without any pre-configured scope."
+commands.deny = ["focus_floating_button"]

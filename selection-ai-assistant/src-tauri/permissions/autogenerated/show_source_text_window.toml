@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-show-source-text-window"
+description = "Enables the show_source_text_window command without any pre-configured scope."
+commands.allow = ["show_source_text_window"]
+
+[[permission]]
+identifier = "deny-show-source-text-window"
+description = "Denies the show_source_text_window command without any pre-configured scope."
+commands.deny = ["show_source_text_window"]

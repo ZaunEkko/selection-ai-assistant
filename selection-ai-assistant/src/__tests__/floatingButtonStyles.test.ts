@@ -23,7 +23,9 @@ describe('floating button styles', () => {
     const css = readFileSync(resolve(__dirname, '../styles.css'), 'utf8');
     const tauriConfig = JSON.parse(readFileSync(resolve(__dirname, '../../src-tauri/tauri.conf.json'), 'utf8'));
     const panelRs = readFileSync(resolve(__dirname, '../../src-tauri/src/commands/panel.rs'), 'utf8');
-    const capabilities = JSON.parse(readFileSync(resolve(__dirname, '../../src-tauri/capabilities/default.json'), 'utf8'));
+    const capabilities = JSON.parse(
+      readFileSync(resolve(__dirname, '../../src-tauri/capabilities/replacement-preset.json'), 'utf8'),
+    );
 
     const floatingWindow = tauriConfig.app.windows.find((window: { label?: string }) => window.label === 'floating-button');
     const replacementPresetWindow = tauriConfig.app.windows.find((window: { label?: string }) => window.label === 'replacement-preset');
@@ -53,7 +55,9 @@ describe('floating button styles', () => {
     const css = readFileSync(resolve(__dirname, '../styles.css'), 'utf8');
     const tauriConfig = JSON.parse(readFileSync(resolve(__dirname, '../../src-tauri/tauri.conf.json'), 'utf8'));
     const panelRs = readFileSync(resolve(__dirname, '../../src-tauri/src/commands/panel.rs'), 'utf8');
-    const capabilities = JSON.parse(readFileSync(resolve(__dirname, '../../src-tauri/capabilities/default.json'), 'utf8'));
+    const capabilities = JSON.parse(
+      readFileSync(resolve(__dirname, '../../src-tauri/capabilities/translate-result.json'), 'utf8'),
+    );
 
     const translateWindow = tauriConfig.app.windows.find((window: { label?: string }) => window.label === 'translate-result');
 
