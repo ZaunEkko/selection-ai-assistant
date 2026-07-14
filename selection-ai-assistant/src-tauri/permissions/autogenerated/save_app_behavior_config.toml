@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-save-app-behavior-config"
+description = "Enables the save_app_behavior_config command without any pre-configured scope."
+commands.allow = ["save_app_behavior_config"]
+
+[[permission]]
+identifier = "deny-save-app-behavior-config"
+description = "Denies the save_app_behavior_config command without any pre-configured scope."
+commands.deny = ["save_app_behavior_config"]

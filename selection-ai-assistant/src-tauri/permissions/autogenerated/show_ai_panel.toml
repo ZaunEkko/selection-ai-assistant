@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-show-ai-panel"
+description = "Enables the show_ai_panel command without any pre-configured scope."
+commands.allow = ["show_ai_panel"]
+
+[[permission]]
+identifier = "deny-show-ai-panel"
+description = "Denies the show_ai_panel command without any pre-configured scope."
+commands.deny = ["show_ai_panel"]

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-open-panel-for-current-selection"
+description = "Enables the open_panel_for_current_selection command without any pre-configured scope."
+commands.allow = ["open_panel_for_current_selection"]
+
+[[permission]]
+identifier = "deny-open-panel-for-current-selection"
+description = "Denies the open_panel_for_current_selection command without any pre-configured scope."
+commands.deny = ["open_panel_for_current_selection"]
