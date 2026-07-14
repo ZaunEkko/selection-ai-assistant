@@ -1,0 +1,11 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "screenshot-overlay-window",
+  "description": "截图翻译取景层的运行时偏好、取消与执行权限。",
+  "windows": ["screenshot-overlay"],
+  "permissions": [
+    "allow-get-runtime-preferences",
+    "allow-cancel-screenshot-translate",
+    "allow-run-screenshot-translate"
+  ]
+}

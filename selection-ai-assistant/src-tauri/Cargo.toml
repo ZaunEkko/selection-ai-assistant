@@ -1,11 +1,11 @@
 [package]
 name = "selection-ai-assistant"
-version = "0.3.0"
+version = "0.3.1"
 description = "Selection AI Assistant"
 authors = ["Selection AI Assistant Contributors"]
 license = "MIT"
 edition = "2021"
-rust-version = "1.77.2"
+rust-version = "1.88.0"
 default-run = "selection-ai-assistant"
 
 [lib]

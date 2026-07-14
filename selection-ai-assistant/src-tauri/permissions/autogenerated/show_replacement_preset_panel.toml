@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-show-replacement-preset-panel"
+description = "Enables the show_replacement_preset_panel command without any pre-configured scope."
+commands.allow = ["show_replacement_preset_panel"]
+
+[[permission]]
+identifier = "deny-show-replacement-preset-panel"
+description = "Denies the show_replacement_preset_panel command without any pre-configured scope."
+commands.deny = ["show_replacement_preset_panel"]

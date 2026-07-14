@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-hide-source-text-window"
+description = "Enables the hide_source_text_window command without any pre-configured scope."
+commands.allow = ["hide_source_text_window"]
+
+[[permission]]
+identifier = "deny-hide-source-text-window"
+description = "Denies the hide_source_text_window command without any pre-configured scope."
+commands.deny = ["hide_source_text_window"]

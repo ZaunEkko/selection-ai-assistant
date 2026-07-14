@@ -1,8 +1,9 @@
 use std::{thread, time::Duration};
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow};
 
 use crate::ai::action_classifier::{classify_action, AiAction};
 use crate::app_state::AppState;
+use crate::commands::access::require_webview_label;
 use crate::commands::panel::{hide_floating_button, show_ai_panel};
 use crate::selection::types::{SelectionAnchorSource, SelectionCandidate, SelectionReadMethod};
 use crate::types::{Point, PublicError};
@@ -112,15 +113,21 @@ pub fn open_panel_for_text(app: AppHandle, text: String) -> Result<PanelContext,
 }
 
 #[tauri::command]
-pub fn get_latest_panel_context(state: State<AppState>) -> Option<PanelContext> {
-    state.latest_selection()
+pub fn get_latest_panel_context(
+    webview: WebviewWindow,
+    state: State<AppState>,
+) -> Result<Option<PanelContext>, PublicError> {
+    require_webview_label(&webview, &["floating-button", "ai-panel"])?;
+    Ok(state.latest_selection())
 }
 
 #[tauri::command]
 pub fn open_panel_for_current_selection(
+    webview: WebviewWindow,
     app: AppHandle,
     state: State<AppState>,
 ) -> Result<PanelContext, PublicError> {
+    require_webview_label(&webview, &["floating-button"])?;
     let context = state.latest_selection().ok_or_else(|| PublicError {
         code: "selection_context_missing".to_string(),
         message: "No selected text is available. Select text first.".to_string(),
@@ -131,7 +138,12 @@ pub fn open_panel_for_current_selection(
 }
 
 #[tauri::command]
-pub fn copy_to_clipboard(app: AppHandle, text: String) -> Result<(), PublicError> {
+pub fn copy_to_clipboard(
+    webview: WebviewWindow,
+    app: AppHandle,
+    text: String,
+) -> Result<(), PublicError> {
+    require_webview_label(&webview, &["ai-panel"])?;
     write_text_to_clipboard(&text)?;
     hide_floating_button(app)?;
     Ok(())
@@ -139,10 +151,12 @@ pub fn copy_to_clipboard(app: AppHandle, text: String) -> Result<(), PublicError
 
 #[tauri::command]
 pub fn replace_selected_text(
+    webview: WebviewWindow,
     app: AppHandle,
     text: String,
     selection_id: Option<String>,
 ) -> Result<(), PublicError> {
+    require_webview_label(&webview, &["floating-button"])?;
     let text = validate_replacement_text(&text)?.to_string();
     let state = app.state::<AppState>();
     validate_replacement_selection(&state, selection_id.as_deref())?;

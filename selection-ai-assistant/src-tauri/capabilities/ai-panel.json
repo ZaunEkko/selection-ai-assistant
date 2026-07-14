@@ -1,0 +1,17 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "ai-panel-window",
+  "description": "AI 面板的上下文、流式请求、原文窗口与拖动权限。",
+  "windows": ["ai-panel"],
+  "permissions": [
+    "allow-get-latest-panel-context",
+    "allow-run-ai-action",
+    "allow-run-ai-follow-up",
+    "allow-show-source-text-window",
+    "allow-hide-source-text-window",
+    "allow-hide-ai-panel",
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "core:window:allow-start-dragging"
+  ]
+}

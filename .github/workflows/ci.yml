@@ -1,0 +1,94 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - dev
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_BUILD_JOBS: 1
+  CARGO_TERM_COLOR: always
+
+jobs:
+  quality:
+    name: Windows quality gate
+    runs-on: windows-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: selection-ai-assistant/.node-version
+          cache: npm
+          cache-dependency-path: selection-ai-assistant/package-lock.json
+
+      - name: Set up npm 11
+        run: npm install --global npm@11.17.0
+
+      - name: Set up stable Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Install frontend dependencies
+        working-directory: selection-ai-assistant
+        run: npm ci
+
+      - name: Audit npm dependencies
+        working-directory: selection-ai-assistant
+        run: npm audit --audit-level=high
+
+      - name: Run frontend tests
+        working-directory: selection-ai-assistant
+        run: npm test
+
+      - name: Build frontend
+        working-directory: selection-ai-assistant
+        run: npm run build
+
+      - name: Check Rust formatting
+        run: cargo fmt --manifest-path selection-ai-assistant/src-tauri/Cargo.toml --check
+
+      - name: Check Rust project
+        run: cargo check --manifest-path selection-ai-assistant/src-tauri/Cargo.toml --locked --jobs 1
+
+      - name: Run Rust tests
+        run: cargo test --manifest-path selection-ai-assistant/src-tauri/Cargo.toml --locked --jobs 1
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked --version 0.22.2
+
+      - name: Audit Rust dependencies
+        run: cargo audit --no-yanked --file selection-ai-assistant/src-tauri/Cargo.lock
+
+  msrv:
+    name: Rust 1.88 compatibility
+    runs-on: windows-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Rust 1.88
+        uses: dtolnay/rust-toolchain@1.88.0
+
+      - name: Check declared MSRV
+        run: cargo check --manifest-path selection-ai-assistant/src-tauri/Cargo.toml --locked --no-default-features --jobs 1

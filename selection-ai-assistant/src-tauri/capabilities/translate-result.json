@@ -1,0 +1,13 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "translate-result-window",
+  "description": "翻译结果窗口的事件、关闭、拖动与缩放权限。",
+  "windows": ["translate-result"],
+  "permissions": [
+    "allow-hide-translate-result",
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "core:window:allow-start-dragging",
+    "core:window:allow-start-resize-dragging"
+  ]
+}

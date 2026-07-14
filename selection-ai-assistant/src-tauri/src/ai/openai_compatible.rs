@@ -384,24 +384,14 @@ fn redaction_secrets(provider: &AiProviderConfig, api_key: &str) -> Vec<String> 
         secrets.push(api_key.to_string());
     }
 
-    for (name, value) in &provider.headers {
+    for (_, value) in &provider.headers {
         let value = value.trim();
-        if !value.is_empty() && is_sensitive_header_name(name) {
+        if !value.is_empty() {
             secrets.push(value.to_string());
         }
     }
 
     secrets
-}
-
-fn is_sensitive_header_name(name: &str) -> bool {
-    let normalized = name.trim().to_ascii_lowercase();
-    normalized == "authorization"
-        || normalized == "proxy-authorization"
-        || normalized.contains("api-key")
-        || normalized.contains("apikey")
-        || normalized.contains("token")
-        || normalized.contains("secret")
 }
 
 fn provider_error_detail(body: &str, secrets: &[String]) -> Option<String> {

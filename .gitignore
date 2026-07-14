@@ -25,3 +25,10 @@ pnpm-debug.log*
 .env
 .env.*
 !.env.example
+
+# Internal agent instructions and validation notes
+CLAUDE.md
+AGENTS.md
+selection-ai-assistant/.claude/
+selection-ai-assistant/docs/spikes/
+selection-ai-assistant/docs/validation/

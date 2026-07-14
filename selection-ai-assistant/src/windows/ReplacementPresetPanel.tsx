@@ -3,8 +3,8 @@ import { useEffect, useState } from 'react';
 import {
   focusFloatingButton,
   formatCommandError,
-  getConfig,
-  saveAppBehaviorConfig,
+  getRuntimePreferences,
+  saveOutputTargetPreferences,
   setReplacementPresetPanelExpanded,
   type AppBehaviorConfig,
   type OutputTargetPreset,
@@ -109,7 +109,7 @@ export function ReplacementPresetPanel() {
   useEffect(() => {
     let active = true;
 
-    getConfig()
+    getRuntimePreferences()
       .then((config) => {
         if (!active) return;
         const nextBehavior = appBehaviorFromConfig(config);
@@ -201,7 +201,11 @@ export function ReplacementPresetPanel() {
     setAppBehavior(preferences);
 
     try {
-      const next = await saveAppBehaviorConfig(preferences);
+      const next = await saveOutputTargetPreferences(
+        kind,
+        targetLanguage,
+        targetLanguage === 'custom' ? normalizedCustomTarget : selectedCustomTarget(appBehavior, kind),
+      );
       const nextBehavior = appBehaviorFromConfig(next);
       setAppBehavior(nextBehavior);
       setCustomTargetDraft(selectedCustomTarget(nextBehavior, kind));

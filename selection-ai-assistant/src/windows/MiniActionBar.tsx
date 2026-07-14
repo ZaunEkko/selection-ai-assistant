@@ -2,7 +2,7 @@ import { listen, emit } from '@tauri-apps/api/event';
 import { useEffect, useRef, useState, type MouseEvent } from 'react';
 import {
   formatCommandError,
-  getConfig,
+  getRuntimePreferences,
   getLatestPanelContext,
   hideReplacementPresetPanel,
   openPanelFromFloatingButton,
@@ -222,7 +222,7 @@ export function MiniActionBar() {
         return;
       }
 
-      const config = await getConfig();
+      const config = await getRuntimePreferences();
       const targetLanguage = outputTargetLanguage(config, 'replacement');
       const translatedText = await collectAiStream({
         requestId: `replace-${Date.now()}`,
@@ -262,7 +262,7 @@ export function MiniActionBar() {
       originalText = context.selection.text;
       await showTranslateResult(anchor, originalText, '', selectionRects);
 
-      const config = await getConfig();
+      const config = await getRuntimePreferences();
       const targetLanguage = outputTargetLanguage(config, 'translation');
       const translatedText = await collectAiStream({
         requestId: `translate-${Date.now()}`,

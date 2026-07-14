@@ -1,0 +1,68 @@
+name: Bug report
+description: 报告可复现的功能缺陷或回归
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢反馈。安全漏洞请勿使用此模板，请通过 SECURITY.md 中的私密入口报告。
+
+  - type: input
+    id: version
+    attributes:
+      label: 版本
+      description: Release 版本、commit SHA 或构建来源
+      placeholder: v0.3.x / commit abc1234
+    validations:
+      required: true
+
+  - type: dropdown
+    id: platform
+    attributes:
+      label: 平台
+      options:
+        - Windows 11
+        - macOS（当前未完整支持）
+        - Linux（当前未完整支持）
+        - 其他
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: 问题描述
+      description: 实际发生了什么？你预期发生什么？
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+      placeholder: |
+        1. 打开……
+        2. 选择……
+        3. 点击……
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: 日志或截图
+      description: 请先删除 API key、token、provider header、私人文本和其他敏感内容。
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: 提交前检查
+      options:
+        - label: 我已搜索现有 Issues，没有找到相同问题。
+          required: true
+        - label: 此报告不包含 API key、token、私人文本或其他秘密。
+          required: true
+        - label: 这不是尚未公开修复的安全漏洞。
+          required: true

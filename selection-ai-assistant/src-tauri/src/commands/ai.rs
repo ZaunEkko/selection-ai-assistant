@@ -1,4 +1,4 @@
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, State, WebviewWindow};
 use tokio::time::{timeout, Duration};
 
 use crate::ai::action_classifier::AiAction;
@@ -6,7 +6,8 @@ use crate::ai::anthropic::AnthropicClient;
 use crate::ai::gemini::GeminiClient;
 use crate::ai::openai_compatible::{AiClientError, ChatMessage, OpenAiCompatibleClient};
 use crate::app_state::AppState;
-use crate::config::AiProviderKind;
+use crate::commands::access::require_webview_label;
+use crate::config::{AiProviderConfig, AiProviderKind, ProviderUpdate};
 use crate::types::PublicError;
 
 const AI_STREAM_TIMEOUT: Duration = Duration::from_secs(60);
@@ -18,7 +19,7 @@ fn public_ai_error(code: &str, err: AiClientError) -> PublicError {
     }
 }
 
-fn provider_api_key(provider: &crate::config::AiProviderConfig) -> Result<String, PublicError> {
+fn provider_api_key(provider: &AiProviderConfig) -> Result<String, PublicError> {
     let saved = provider.api_key.trim();
     if !saved.is_empty() {
         return Ok(saved.to_string());
@@ -27,6 +28,20 @@ fn provider_api_key(provider: &crate::config::AiProviderConfig) -> Result<String
         code: "api_key_missing".to_string(),
         message: "请在设置中填写 API 密钥，或配置 SELECTION_AI_API_KEY 环境变量。".to_string(),
     })
+}
+
+fn resolve_provider_update(
+    state: &AppState,
+    update: &ProviderUpdate,
+) -> Result<AiProviderConfig, PublicError> {
+    state
+        .config
+        .lock()
+        .map(|config| update.resolve(&config))
+        .map_err(|err| PublicError {
+            code: "config_lock_failed".to_string(),
+            message: err.to_string(),
+        })
 }
 
 pub fn build_prompt_messages(action: AiAction, text: &str) -> Vec<ChatMessage> {
@@ -299,10 +314,12 @@ fn default_provider_with_api_key(
 
 #[tauri::command]
 pub async fn run_ai_action(
+    webview: WebviewWindow,
     app: AppHandle,
     state: State<'_, AppState>,
     request: RunAiActionRequest,
 ) -> Result<RunAiActionResponse, PublicError> {
+    require_webview_label(&webview, &["ai-panel", "floating-button"])?;
     if request.text.trim().is_empty() {
         return Err(PublicError {
             code: "selection_text_required".to_string(),
@@ -366,10 +383,12 @@ pub async fn run_ai_action(
 
 #[tauri::command]
 pub async fn run_ai_follow_up(
+    webview: WebviewWindow,
     app: AppHandle,
     state: State<'_, AppState>,
     request: RunAiFollowUpRequest,
 ) -> Result<RunAiActionResponse, PublicError> {
+    require_webview_label(&webview, &["ai-panel"])?;
     if request.request_id.trim().is_empty() {
         return Err(PublicError {
             code: "request_id_required".to_string(),
@@ -449,7 +468,24 @@ pub struct TestProviderConnectionResponse {
 
 #[tauri::command]
 pub async fn list_provider_models(
-    provider: crate::config::AiProviderConfig,
+    webview: WebviewWindow,
+    state: State<'_, AppState>,
+    provider: ProviderUpdate,
+) -> Result<Vec<String>, PublicError> {
+    require_webview_label(&webview, &["main"])?;
+    list_provider_models_for_update(&state, provider).await
+}
+
+pub async fn list_provider_models_for_update(
+    state: &AppState,
+    provider: ProviderUpdate,
+) -> Result<Vec<String>, PublicError> {
+    let provider = resolve_provider_update(state, &provider)?;
+    list_provider_models_for_provider(provider).await
+}
+
+pub async fn list_provider_models_for_provider(
+    provider: AiProviderConfig,
 ) -> Result<Vec<String>, PublicError> {
     let api_key = provider_api_key(&provider)?;
     list_provider_models_for_kind(&provider, &api_key)
@@ -459,7 +495,24 @@ pub async fn list_provider_models(
 
 #[tauri::command]
 pub async fn test_provider_connection(
-    provider: crate::config::AiProviderConfig,
+    webview: WebviewWindow,
+    state: State<'_, AppState>,
+    provider: ProviderUpdate,
+) -> Result<TestProviderConnectionResponse, PublicError> {
+    require_webview_label(&webview, &["main"])?;
+    test_provider_connection_for_update(&state, provider).await
+}
+
+pub async fn test_provider_connection_for_update(
+    state: &AppState,
+    provider: ProviderUpdate,
+) -> Result<TestProviderConnectionResponse, PublicError> {
+    let provider = resolve_provider_update(state, &provider)?;
+    test_provider_connection_for_provider(provider).await
+}
+
+pub async fn test_provider_connection_for_provider(
+    provider: AiProviderConfig,
 ) -> Result<TestProviderConnectionResponse, PublicError> {
     let api_key = provider_api_key(&provider)?;
 
