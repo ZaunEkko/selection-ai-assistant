@@ -55,7 +55,10 @@ use crate::{
             show_floating_button_for_selection,
         },
         screenshot::show_screenshot_overlay_for_point,
-        selection::{create_panel_context_for_selection, emit_panel_context},
+        selection::{
+            create_panel_context_for_selection, emit_panel_context,
+            panel_context_for_visible_refresh,
+        },
     },
     config::AppConfig,
     input_monitor::events::{
@@ -699,10 +702,17 @@ impl PixelBuffer {
     }
 }
 
+/// 首次拖拽选字后，用像素扫描定位选区高亮。
+///
+/// `excluded_rects` 不能省：`PixelBuffer` 抓的是**合成后的屏幕**而不是窗口 DC，
+/// 助手自己的置顶窗口（上一次残留的操作条、结果面板等）只要与搜索带相交，
+/// 其像素就会一起参与高亮配色扫描，可能被当成选区本身——之后滚动跟随的就是
+/// 那个悬浮窗，而不是文字。跟踪路径一直传了排除矩形，首次捕获同样需要。
 fn visual_selection_from_drag(
     source_window_handle: isize,
     down_point: Point,
     up_point: Point,
+    excluded_rects: &[Rect],
 ) -> Option<SelectionVisualState> {
     let window_rect = source_window_screen_rect(source_window_handle)?;
     let search_rect = drag_visual_search_rect(window_rect, down_point, up_point)?;
@@ -722,7 +732,7 @@ fn visual_selection_from_drag(
         color,
         Some(down_point.y.min(up_point.y)),
         Some(down_point.x.min(up_point.x)),
-        &[],
+        excluded_rects,
     )
     .map(|rect| SelectionVisualState {
         source_window_handle,
@@ -1093,7 +1103,8 @@ fn capture_store_and_show_floating_button(
         context,
         source_window_handle,
         visual_selection,
-    } = match read_current_selection_context(anchor, &config, options) {
+    } = match read_current_selection_context(anchor, &config, options, &assistant_window_rects(app))
+    {
         Some(result) => result,
         None => {
             trace_selection_monitor(format_args!("capture failed: no selection context"));
@@ -1248,6 +1259,11 @@ struct ScrollTracker {
     settled_measurement_stable: bool,
     /// 是否因为快速滚动而处于隐藏状态，用于避免重复调用 hide。
     hidden: bool,
+    /// 本次会话是否以「放弃」结束（选区滚出视口，或连续测量失败）。
+    ///
+    /// 放弃之后不能再凭预测把操作条显示出来：选区已经确认找不到了，
+    /// 那样只会在无关内容上凭空冒出一个幽灵操作条。必须等真实测量成功。
+    abandoned: bool,
     process_name: String,
     source_window_handle: isize,
 }
@@ -1265,8 +1281,10 @@ struct ScrollTrackerSnapshot {
     ratio_anchor_y: f64,
     ratio_burst_valid: bool,
     wheel_seq: u64,
+    tracked_rect_measured: bool,
     failures: u32,
     settled_measurement_stable: bool,
+    hidden: bool,
     process_name: String,
     source_window_handle: isize,
 }
@@ -1319,7 +1337,9 @@ fn scroll_tracker_snapshot(session_id: u64) -> Option<ScrollTrackerSnapshot> {
         ratio_anchor_y: tracker.ratio_anchor_y,
         ratio_burst_valid: tracker.ratio_burst_valid,
         wheel_seq: tracker.wheel_seq,
+        tracked_rect_measured: tracker.tracked_rect_measured,
         failures: tracker.failures,
+        hidden: tracker.hidden,
         settled_measurement_stable: tracker.settled_measurement_stable,
         process_name: tracker.process_name.clone(),
         source_window_handle: tracker.source_window_handle,
@@ -1334,7 +1354,13 @@ fn scroll_tracker_snapshot(session_id: u64) -> Option<ScrollTrackerSnapshot> {
 /// 必须按当前路由方式判断真正的接收者。
 fn wheel_routes_to_focused_window() -> bool {
     const SPI_GETMOUSEWHEELROUTING: u32 = 0x201C;
+    /// 滚轮送给焦点窗口。
     const MOUSEWHEEL_ROUTING_FOCUS: u32 = 0;
+    /// 混合模式：Store 应用送指针下的窗口，**桌面应用送焦点窗口**。
+    /// 我们跟随的来源全部是桌面应用，所以这里等同于焦点路由。
+    const MOUSEWHEEL_ROUTING_HYBRID: u32 = 1;
+    /// 滚轮送给指针下的窗口。
+    const MOUSEWHEEL_ROUTING_MOUSE_POS: u32 = 2;
 
     let mut routing: u32 = u32::MAX;
     let ok = unsafe {
@@ -1345,8 +1371,17 @@ fn wheel_routes_to_focused_window() -> bool {
             0,
         )
     };
-    // 读不到就按 Windows 10+ 的默认行为（送给指针下的窗口）处理。
-    ok != 0 && routing == MOUSEWHEEL_ROUTING_FOCUS
+    if ok == 0 {
+        // 读不到就按 Windows 10+ 的默认观感（送给指针下的窗口）处理。
+        return false;
+    }
+
+    match routing {
+        MOUSEWHEEL_ROUTING_FOCUS | MOUSEWHEEL_ROUTING_HYBRID => true,
+        MOUSEWHEEL_ROUTING_MOUSE_POS => false,
+        // 未知取值同样退回指针路由。
+        _ => false,
+    }
 }
 
 /// 光标位置所属的顶层窗口。
@@ -1423,15 +1458,30 @@ fn follow_visible_floating_button_after_scroll(
     // 只有真正测量过的矩形才配当基线：上一轮若是因连续测量失败而放弃，
     // 留下的 tracked_rect 是没验证过的预测值，拿它当位移起点会把上一轮的
     // 误差算进这一轮的 wheel delta，污染整个进程的比例缓存。
-    let measured_tracked_rect = scroll_tracker().lock().ok().and_then(|guard| {
-        guard.as_ref().and_then(|tracker| {
-            (tracker.generation == generation && tracker.tracked_rect_measured)
-                .then_some(tracker.tracked_rect)
+    //
+    // 但「未经测量」只在**复用已停止/已放弃的会话**时才是问题。会话还在跑时，
+    // tracked_rect 是本轮突发滚动累积下来的预测值，必须沿用：否则每个事件都
+    // 从上一次测量重新起算，预测只前进一格。视觉跟踪的搜索带只有 ±160px，
+    // 连续多格快滚会直接把选区甩出搜索带，每次扫描都落空、最终误判为跟丢。
+    let (reusable_tracked_rect, baseline_measured, recovering_from_abandon) = scroll_tracker()
+        .lock()
+        .ok()
+        .and_then(|guard| {
+            guard.as_ref().and_then(|tracker| {
+                if tracker.generation != generation {
+                    return None;
+                }
+                let abandoned = !tracker.running && tracker.abandoned;
+                // 会话仍在运行 => 沿用累积预测；已停止 => 只认测量过的几何。
+                (tracker.running || tracker.tracked_rect_measured).then_some((
+                    Some(tracker.tracked_rect),
+                    tracker.tracked_rect_measured,
+                    abandoned,
+                ))
+            })
         })
-    });
-    // 基线是否具备测量精度，决定这一段位移能否用于学习比例。
-    let baseline_measured = measured_tracked_rect.is_some();
-    let Some(current_rect) = measured_tracked_rect
+        .unwrap_or((None, false, false));
+    let Some(current_rect) = reusable_tracked_rect
         .or_else(|| {
             state
                 .latest_selection_visual()
@@ -1479,9 +1529,12 @@ fn follow_visible_floating_button_after_scroll(
                 // 拿这段位移去学比例——等第一次稳定测量重新锚定后再说。
                 ratio_burst_valid: pace != ScrollPace::Fast && baseline_measured,
                 wheel_seq: 1,
+                abandoned: false,
                 failures: 0,
                 settled_measurement_stable: false,
-                hidden: pace == ScrollPace::Fast,
+                // 上一轮是放弃收场的话，本轮同样先保持隐藏：等真实测量成功
+                // 再显示，不能凭预测把操作条摆回一个已经找不到的选区上。
+                hidden: pace == ScrollPace::Fast || recovering_from_abandon,
                 process_name,
                 source_window_handle,
             });
@@ -1512,6 +1565,11 @@ fn follow_visible_floating_button_after_scroll(
                 scroll_burst.accumulated_notches()
             ));
         }
+    } else if recovering_from_abandon {
+        // 上一轮已经确认选区找不到了，这一轮先不显示，等测量把它找回来。
+        trace_selection_monitor(format_args!(
+            "scroll follow restarted after abandon; waiting for a real measurement"
+        ));
     } else if let Ok(position) = floating_button_position_for_selection(
         app,
         Point {
@@ -1541,10 +1599,21 @@ fn spawn_scroll_tracker(app: tauri::AppHandle, session_id: u64) {
             let Some(snapshot) = scroll_tracker_snapshot(session_id) else {
                 return;
             };
-            if app.state::<AppState>().scroll_follow_generation() != snapshot.generation
-                || snapshot.started_at.elapsed() > SCROLL_TRACK_MAX_SESSION
-            {
+            if app.state::<AppState>().scroll_follow_generation() != snapshot.generation {
                 finish_scroll_tracker(&app, session_id, false);
+                return;
+            }
+            if snapshot.started_at.elapsed() > SCROLL_TRACK_MAX_SESSION {
+                // 安全阀触发时并不代表已经吸附成功。持续快滚 20 秒的场景里
+                // tracked_rect 只是预测值、测量还被刻意跳过，按成功收尾会把
+                // 猜出来的几何平移进选区上下文并推给面板。只有确实测量过才
+                // 允许提交，否则一律按放弃处理。
+                let measured = snapshot.tracked_rect_measured;
+                trace_selection_monitor(format_args!(
+                    "scroll tracking hit the {}s safety timeout (measured={measured})",
+                    SCROLL_TRACK_MAX_SESSION.as_secs()
+                ));
+                finish_scroll_tracker(&app, session_id, !measured);
                 return;
             }
 
@@ -1619,6 +1688,18 @@ fn measure_and_follow_selection(
         }
     }
 
+    // 相邻两次测量几乎没有位移 => 应用的滚动动画已经播完。
+    let step_delta_y = measured_rect.y - snapshot.last_measured_y;
+    let measurement_is_stable = settled_measurement_is_stable(settled, step_delta_y);
+
+    // 因快速滚动而隐藏的操作条，必须等动画真的停下来才能重新出现。
+    // 空闲时间一到就把它显示在中途位置上，它会跟着剩余动画一路追，
+    // 正是本次要消灭的观感；此时继续测量即可，不显示。
+    if snapshot.hidden && !measurement_is_stable {
+        commit_scroll_measurement(session_id, snapshot, measured_rect, placement_rect, false);
+        return;
+    }
+
     let Ok(position) = floating_button_position_for_selection(
         app,
         Point {
@@ -1649,12 +1730,8 @@ fn measure_and_follow_selection(
         return;
     }
 
-    let state = app.state::<AppState>();
-    state.store_latest_floating_button_window_position(position);
-
-    // 相邻两次测量几乎没有位移 => 应用的滚动动画已经播完。
-    let step_delta_y = measured_rect.y - snapshot.last_measured_y;
-    let measurement_is_stable = settled_measurement_is_stable(settled, step_delta_y);
+    app.state::<AppState>()
+        .store_latest_floating_button_window_position(position);
 
     // 只在动画停下来之后学习比例，且用「整段位移 ÷ 整段 wheel delta」。
     // 用动画中途的单帧位移去算会把比例算小一个数量级（实测记事本 0.09
@@ -1678,27 +1755,57 @@ fn measure_and_follow_selection(
         }
     }
 
-    if let Ok(mut guard) = scroll_tracker().lock() {
-        if let Some(tracker) = guard.as_mut() {
-            if tracker.session_id == session_id {
-                tracker.tracked_rect = placement_rect;
-                tracker.tracked_rect_measured = true;
-                tracker.last_measured_y = measured_rect.y;
-                if measurement_is_stable {
-                    // 这一段滚动结算完毕，重置位移起点。只扣掉本次快照已计入
-                    // 的 delta，测量期间新到的滚轮事件要保留。
-                    // 无论这段是否可信都要重置：不可信的那段更不能留着累加。
-                    tracker.pending_wheel_delta -= snapshot.pending_wheel_delta;
-                    tracker.ratio_anchor_y = measured_rect.y;
-                    tracker.ratio_burst_valid = true;
-                }
-                tracker.failures = 0;
-                // 只有「已经静止 + 这一帧几乎没再动」才算吸附完成。空闲时间到了
-                // 但画面还在动时继续测，否则会把动画中途的位置当成最终位置。
-                tracker.settled_measurement_stable = measurement_is_stable;
-                tracker.hidden = false;
-            }
-        }
+    commit_scroll_measurement(
+        session_id,
+        snapshot,
+        measured_rect,
+        placement_rect,
+        measurement_is_stable,
+    );
+}
+
+/// 把一次测量结果写回 tracker。
+///
+/// `shown` 为 false 表示这次只更新几何、没有显示操作条（快速滚动尚未停稳），
+/// 此时不能把 `hidden` 复位，否则后续的 WaitHidden 不会再隐藏它。
+fn commit_scroll_measurement(
+    session_id: u64,
+    snapshot: &ScrollTrackerSnapshot,
+    measured_rect: Rect,
+    placement_rect: Rect,
+    measurement_is_stable: bool,
+) {
+    let Ok(mut guard) = scroll_tracker().lock() else {
+        return;
+    };
+    let Some(tracker) = guard.as_mut() else {
+        return;
+    };
+    // 必须再校验一次 wheel_seq：先前那次校验已经放开了锁，期间新到的滚轮
+    // 事件会装入更新的预测值。只比对 session_id 的话，过期测量会把它覆盖掉，
+    // 还顺手清空 failures/hidden 并置上 settled_measurement_stable，
+    // 让下一轮在仍有新滚动时就收尾。
+    if tracker.session_id != session_id || tracker.wheel_seq != snapshot.wheel_seq {
+        return;
+    }
+
+    tracker.tracked_rect = placement_rect;
+    tracker.tracked_rect_measured = true;
+    tracker.last_measured_y = measured_rect.y;
+    if measurement_is_stable {
+        // 这一段滚动结算完毕，重置位移起点。只扣掉本次快照已计入的 delta，
+        // 测量期间新到的滚轮事件要保留。无论这段是否可信都要重置：
+        // 不可信的那段更不能留着累加。
+        tracker.pending_wheel_delta -= snapshot.pending_wheel_delta;
+        tracker.ratio_anchor_y = measured_rect.y;
+        tracker.ratio_burst_valid = true;
+    }
+    tracker.failures = 0;
+    // 只有「已经静止 + 这一帧几乎没再动」才算吸附完成。空闲时间到了但画面
+    // 还在动时继续测，否则会把动画中途的位置当成最终位置。
+    tracker.settled_measurement_stable = measurement_is_stable;
+    if measurement_is_stable || !tracker.hidden {
+        tracker.hidden = false;
     }
 }
 
@@ -1833,6 +1940,7 @@ fn finish_scroll_tracker(app: &tauri::AppHandle, session_id: u64, abandon: bool)
                 return;
             }
             tracker.running = false;
+            tracker.abandoned = abandon;
             tracked_rect = Some(tracker.tracked_rect);
             generation = Some(tracker.generation);
         }
@@ -1884,6 +1992,11 @@ fn finish_scroll_tracker(app: &tauri::AppHandle, session_id: u64, abandon: bool)
     emit_context_if_panel_visible(app, &context);
 }
 
+/// 滚动结束后把新几何同步给面板。
+///
+/// **必须清掉 `auto_run`**：面板是从操作条打开的，上下文里 `auto_run` 为 true；
+/// 前端见到 `autoRun === true` 就会再跑一次 AI 请求。仅仅滚动一下选区就重复
+/// 发起一次计费请求显然不对——这里只是几何刷新，不是新的执行意图。
 fn emit_context_if_panel_visible(
     app: &tauri::AppHandle,
     context: &crate::commands::selection::PanelContext,
@@ -1892,7 +2005,7 @@ fn emit_context_if_panel_visible(
         return;
     };
     if window.is_visible().unwrap_or(false) {
-        let _ = emit_panel_context(app, context);
+        let _ = emit_panel_context(app, &panel_context_for_visible_refresh(context));
     }
 }
 
@@ -1933,6 +2046,7 @@ fn read_current_selection_context(
     fallback_point: Point,
     config: &AppConfig,
     options: SelectionCaptureOptions,
+    assistant_rects: &[Rect],
 ) -> Option<SelectionCaptureResult> {
     let (window, source_window_handle) = match foreground_window_info(config) {
         Some(result) => result,
@@ -1948,7 +2062,7 @@ fn read_current_selection_context(
         window.process_name, window.window_title, window.elevated
     ));
     let visual_selection = options.drag_points.and_then(|(down_point, up_point)| {
-        visual_selection_from_drag(source_window_handle, down_point, up_point)
+        visual_selection_from_drag(source_window_handle, down_point, up_point, assistant_rects)
     });
     let uia_points = options
         .drag_points
