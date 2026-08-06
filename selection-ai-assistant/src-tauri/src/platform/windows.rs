@@ -1766,6 +1766,10 @@ fn measure_and_follow_selection(
     }
 
     if show_floating_button_at_position(app.clone(), position).is_err() {
+        // 提交已经把 settled_measurement_stable 置真、hidden 清零。若就此返回，
+        // 下一轮会直接 Finish 收尾，而操作条其实根本没显示出来——快滚之后
+        // 一次偶发的 show 失败就会让它永久消失。回滚这两个状态以便重试。
+        rollback_stable_commit(session_id);
         record_scroll_measure_failure(session_id);
         return;
     }
@@ -1773,8 +1777,11 @@ fn measure_and_follow_selection(
     app.state::<AppState>()
         .store_latest_floating_button_window_position(position);
 
-    // show 期间仍可能来新的滚轮事件并要求隐藏。上面的提交已经过时，
-    // 这里补一次核对：若 tracker 现在要求隐藏，就把刚显示出来的收回去。
+    // show 期间仍可能发生变化：新的滚轮事件要求隐藏，或者选区被清除/替换
+    // （后者会自增 generation，但**不会**改动旧 tracker 的 hidden）。
+    // 两种都必须核对，否则旧操作条会残留在屏幕上。
+    let generation_changed =
+        app.state::<AppState>().scroll_follow_generation() != snapshot.generation;
     let superseded_and_hidden = scroll_tracker()
         .lock()
         .ok()
@@ -1784,7 +1791,7 @@ fn measure_and_follow_selection(
                 .map(|tracker| tracker.session_id == session_id && tracker.hidden)
         })
         .unwrap_or(false);
-    if superseded_and_hidden {
+    if generation_changed || superseded_and_hidden {
         let _ = hide_floating_button(app.clone());
         return;
     }
@@ -1861,6 +1868,21 @@ fn commit_scroll_measurement(
     true
 }
 
+/// 回滚一次「已稳定并已显示」的提交：show 实际上失败了。
+///
+/// 不回滚的话，下一轮会因为 settled_measurement_stable 为真而直接收尾，
+/// 一次偶发的 show 失败就变成操作条永久消失。
+fn rollback_stable_commit(session_id: u64) {
+    if let Ok(mut guard) = scroll_tracker().lock() {
+        if let Some(tracker) = guard.as_mut() {
+            if tracker.session_id == session_id {
+                tracker.settled_measurement_stable = false;
+                tracker.hidden = true;
+            }
+        }
+    }
+}
+
 /// 作废当前的比例学习窗口：这一段位移中间有没测到的空档。
 fn invalidate_scroll_ratio_burst(session_id: u64) {
     if let Ok(mut guard) = scroll_tracker().lock() {
@@ -1927,6 +1949,21 @@ fn measure_tracked_selection_rect(
 
     // 这一帧不允许走 UIA：属于「没测」，不是「测失败」。
     if !allow_uia {
+        return MeasureOutcome::Skipped;
+    }
+
+    // 来源窗口不在前台时不查 UIA。
+    //
+    // read_current_uia_selection_from_hwnd 会先取 GetFocusedElement，并在选择
+    // 结果时优先采用它。指针路由下用户可以滚动一个未获焦点的来源窗口，此时
+    // 焦点应用若也有选中文本，拿回来的就是**别的应用**的选区：文本不同会连续
+    // 累计失败、把一个仍然有效的操作条隐藏掉；文本恰好相同则会把操作条吸到
+    // 毫不相干的几何上。这一帧退回「没测」，交给像素测量即可。
+    let source_is_foreground = {
+        let foreground = unsafe { GetForegroundWindow() };
+        !foreground.is_null() && foreground as isize == snapshot.source_window_handle
+    };
+    if !source_is_foreground {
         return MeasureOutcome::Skipped;
     }
 
