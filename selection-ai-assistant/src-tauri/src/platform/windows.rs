@@ -362,6 +362,7 @@ fn handle_mouse_event(
                 app,
                 visible_floating_button,
                 scroll_burst,
+                position,
                 delta,
                 now_ms,
             );
@@ -1298,10 +1299,27 @@ fn scroll_tracker_snapshot(session_id: u64) -> Option<ScrollTrackerSnapshot> {
     })
 }
 
+/// 这次滚轮事件是不是真的作用在选区所在的窗口上。
+///
+/// Windows 10 起默认「滚动鼠标指针下方的窗口」，所以光标在来源窗口内即可；
+/// 若用户关掉了该设置，滚轮会送给前台窗口，因此来源窗口是前台时也放行。
+/// 两者都不满足，说明用户在滚别的东西，本次跟随必须忽略。
+fn wheel_targets_source_window(source_window_handle: isize, wheel_position: Point) -> bool {
+    if source_window_screen_rect(source_window_handle)
+        .is_some_and(|rect| crate::input_monitor::events::rect_contains(rect, wheel_position))
+    {
+        return true;
+    }
+
+    let foreground = unsafe { GetForegroundWindow() };
+    !foreground.is_null() && foreground as isize == source_window_handle
+}
+
 fn follow_visible_floating_button_after_scroll(
     app: &tauri::AppHandle,
     visible_floating_button: &mut Option<VisibleFloatingButton>,
     scroll_burst: &mut ScrollBurst,
+    wheel_position: Point,
     wheel_delta: f64,
     now_ms: u64,
 ) {
@@ -1320,6 +1338,17 @@ fn follow_visible_floating_button_after_scroll(
     let Some(source_window_handle) = state.latest_selection_window_handle() else {
         return;
     };
+    // 低层鼠标钩子是全局的：在别的窗口上滚动同样会走到这里。不加判断的话，
+    // 滚动任意一个无关窗口都会驱动跟随——操作条被预测位移带偏、快滚还会
+    // 把它整个隐藏掉，而来源窗口其实一动没动。
+    if !wheel_targets_source_window(source_window_handle, wheel_position) {
+        trace_selection_monitor(format_args!(
+            "scroll ignored: wheel at {:?} is not over the selection source window",
+            wheel_position
+        ));
+        return;
+    }
+
     let process_name = state
         .latest_selection()
         .map(|context| context.selection.source_app)
