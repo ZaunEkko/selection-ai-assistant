@@ -1683,7 +1683,7 @@ fn measure_and_follow_selection(
         match measure_tracked_selection_rect(app, snapshot, allow_uia) {
             MeasureOutcome::Measured { rect, visual } => (rect, visual),
             MeasureOutcome::Failed => {
-                record_scroll_measure_failure(session_id);
+                record_scroll_measure_failure(session_id, snapshot.wheel_seq);
                 return;
             }
             // 这一帧被节流跳过，什么都没发生，不能算跟丢。
@@ -1700,6 +1700,13 @@ fn measure_and_follow_selection(
 
     if let Some(window_rect) = source_window_screen_rect(snapshot.source_window_handle) {
         if !selection_still_trackable(placement_rect, window_rect) {
+            // 放弃是**持久**动作：隐藏操作条，并让下一轮也先保持隐藏。所以在
+            // 执行前必须确认这次测量没有被后续滚轮取代——尤其是反向滚动会把
+            // 选区重新带回视口，此时拿一份过期的「已滚出视口」结论去放弃，
+            // 会把一个其实可见的选区判死。
+            if !scroll_wheel_seq_unchanged(session_id, snapshot.wheel_seq) {
+                return;
+            }
             trace_selection_monitor(format_args!(
                 "floating button hidden: selection scrolled out of source window"
             ));
@@ -1735,7 +1742,7 @@ fn measure_and_follow_selection(
         },
         &[placement_rect],
     ) else {
-        record_scroll_measure_failure(session_id);
+        record_scroll_measure_failure(session_id, snapshot.wheel_seq);
         return;
     };
 
@@ -1768,20 +1775,22 @@ fn measure_and_follow_selection(
     if show_floating_button_at_position(app.clone(), position).is_err() {
         // 提交已经把 settled_measurement_stable 置真、hidden 清零。若就此返回，
         // 下一轮会直接 Finish 收尾，而操作条其实根本没显示出来——快滚之后
-        // 一次偶发的 show 失败就会让它永久消失。回滚这两个状态以便重试。
-        rollback_stable_commit(session_id);
-        record_scroll_measure_failure(session_id);
+        // 一次偶发的 show 失败就会让它永久消失。回滚以便重试；hidden 只在
+        // 本来就是隐藏状态时才恢复，否则会误判屏幕上仍在的旧操作条。
+        rollback_failed_show(session_id, snapshot.hidden);
+        record_scroll_measure_failure(session_id, snapshot.wheel_seq);
         return;
     }
 
     app.state::<AppState>()
         .store_latest_floating_button_window_position(position);
 
-    // show 期间仍可能发生变化：新的滚轮事件要求隐藏，或者选区被清除/替换
-    // （后者会自增 generation，但**不会**改动旧 tracker 的 hidden）。
-    // 两种都必须核对，否则旧操作条会残留在屏幕上。
-    let generation_changed =
-        app.state::<AppState>().scroll_follow_generation() != snapshot.generation;
+    // show 期间若又来滚轮事件要求隐藏，把刚显示出来的收回去。
+    //
+    // 这里**不能**因为 generation 变了就隐藏：floating-button 是共享窗口，
+    // 新选区被捕获时会重新定位并显示同一个窗口、然后自增 generation。此时
+    // 隐藏等于把新选区那个位置正确的操作条删掉，而监视循环仍记录它可见，
+    // 不会自动再显示。旧会话只管自己那一份，交给新主人处理。
     let superseded_and_hidden = scroll_tracker()
         .lock()
         .ok()
@@ -1791,7 +1800,7 @@ fn measure_and_follow_selection(
                 .map(|tracker| tracker.session_id == session_id && tracker.hidden)
         })
         .unwrap_or(false);
-    if generation_changed || superseded_and_hidden {
+    if superseded_and_hidden {
         let _ = hide_floating_button(app.clone());
         return;
     }
@@ -1868,16 +1877,24 @@ fn commit_scroll_measurement(
     true
 }
 
-/// 回滚一次「已稳定并已显示」的提交：show 实际上失败了。
+/// 回滚一次提交：show 实际上失败了。
 ///
-/// 不回滚的话，下一轮会因为 settled_measurement_stable 为真而直接收尾，
+/// 不回滚 `settled_measurement_stable` 的话，下一轮会因为它为真而直接收尾，
 /// 一次偶发的 show 失败就变成操作条永久消失。
-fn rollback_stable_commit(session_id: u64) {
+///
+/// `restore_hidden` 只在**本次调用之前操作条确实处于隐藏状态**时才置回 true。
+/// 普通慢滚样本 show 失败时并没有执行过隐藏，屏幕上那个旧操作条还在——
+/// 此时若把 hidden 置真，后续不稳定样本会一直不显示，而滚动一旦转为快速，
+/// 滚轮处理里 `!tracker.hidden` 为假会跳过 hide，旧操作条就整段快滚都留在
+/// 屏幕上。
+fn rollback_failed_show(session_id: u64, restore_hidden: bool) {
     if let Ok(mut guard) = scroll_tracker().lock() {
         if let Some(tracker) = guard.as_mut() {
             if tracker.session_id == session_id {
                 tracker.settled_measurement_stable = false;
-                tracker.hidden = true;
+                if restore_hidden {
+                    tracker.hidden = true;
+                }
             }
         }
     }
@@ -1894,10 +1911,28 @@ fn invalidate_scroll_ratio_burst(session_id: u64) {
     }
 }
 
-fn record_scroll_measure_failure(session_id: u64) {
+/// 这次测量期间有没有来新的滚轮事件。用于在执行持久性动作前确认结果未过期。
+fn scroll_wheel_seq_unchanged(session_id: u64, wheel_seq: u64) -> bool {
+    scroll_tracker()
+        .lock()
+        .ok()
+        .and_then(|guard| {
+            guard
+                .as_ref()
+                .map(|tracker| tracker.session_id == session_id && tracker.wheel_seq == wheel_seq)
+        })
+        .unwrap_or(false)
+}
+
+/// 记一次测量失败。
+///
+/// 同样要校验 `wheel_seq`：失败结果和成功结果一样可能是过期的。只比对
+/// session_id 的话，连续滚动时几次被取代的 UIA 尝试就能把失败数累到上限，
+/// 放弃一个在当前位置上从未失败过的选区。
+fn record_scroll_measure_failure(session_id: u64, wheel_seq: u64) {
     if let Ok(mut guard) = scroll_tracker().lock() {
         if let Some(tracker) = guard.as_mut() {
-            if tracker.session_id == session_id {
+            if tracker.session_id == session_id && tracker.wheel_seq == wheel_seq {
                 tracker.failures = tracker.failures.saturating_add(1);
             }
         }
@@ -1929,6 +1964,7 @@ fn measure_tracked_selection_rect(
 ) -> MeasureOutcome {
     let state = app.state::<AppState>();
     let excluded_rects = assistant_window_rects(app);
+    let has_visual_state = state.latest_selection_visual().is_some();
 
     if let Some(visual) = state.latest_selection_visual() {
         if let Some(window_rect) = source_window_screen_rect(visual.source_window_handle) {
@@ -1958,13 +1994,21 @@ fn measure_tracked_selection_rect(
     // 结果时优先采用它。指针路由下用户可以滚动一个未获焦点的来源窗口，此时
     // 焦点应用若也有选中文本，拿回来的就是**别的应用**的选区：文本不同会连续
     // 累计失败、把一个仍然有效的操作条隐藏掉；文本恰好相同则会把操作条吸到
-    // 毫不相干的几何上。这一帧退回「没测」，交给像素测量即可。
+    // 毫不相干的几何上。
     let source_is_foreground = {
         let foreground = unsafe { GetForegroundWindow() };
         !foreground.is_null() && foreground as isize == snapshot.source_window_handle
     };
     if !source_is_foreground {
-        return MeasureOutcome::Skipped;
+        // 有视觉状态可用时，这一帧退回「没测」，交给像素测量接手即可。
+        // 但**没有**视觉状态时不能一直 Skipped：那样既不推进稳定性也不计失败，
+        // 慢速路径会持续显示未经验证的预测，直到 20 秒安全阀才收场。
+        // 此时唯一的测量手段已经不可用，按失败处理，让失败上限尽快接管。
+        return if has_visual_state {
+            MeasureOutcome::Skipped
+        } else {
+            MeasureOutcome::Failed
+        };
     }
 
     let Some(context) = state.latest_selection() else {
