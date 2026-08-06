@@ -199,6 +199,222 @@ pub fn should_follow_scroll_for_source(source_app: &str, _window_title: &str) ->
     !is_browser_process(source_app)
 }
 
+/// 一个标准滚轮刻度的 delta 值。
+pub const WHEEL_DELTA_UNIT: f64 = 120.0;
+/// 尚未测量出真实滚动比例时的保守初值。
+pub const DEFAULT_PIXELS_PER_WHEEL_DELTA: f64 = 0.85;
+const MIN_PIXELS_PER_WHEEL_DELTA: f64 = 0.08;
+const MAX_PIXELS_PER_WHEEL_DELTA: f64 = 2.2;
+const SCROLL_RATIO_SMOOTHING: f64 = 0.4;
+const MIN_MEASURABLE_SCROLL_PX: f64 = 2.0;
+
+/// 滚轮节奏的衰减地平线：超过这段时间的历史事件不再计入当前节奏。
+pub const FAST_SCROLL_DECAY_WINDOW_MS: f64 = 300.0;
+/// 累计刻度数达到该值即进入快速滚动。
+pub const FAST_SCROLL_NOTCH_THRESHOLD: f64 = 2.5;
+/// 迟滞下沿：进入快速滚动后要降到该值以下才恢复逐帧跟随。
+///
+/// 没有迟滞的话，速度停在阈值附近时会在隐藏/显示之间反复抖动。
+pub const SLOW_RESUME_NOTCH_THRESHOLD: f64 = 1.5;
+/// 停止滚动后判定为静止所需的空闲时间。
+pub const SCROLL_SETTLE_IDLE_MS: u64 = 150;
+/// 连续测量失败多少次后放弃跟随并隐藏操作条。
+pub const MAX_SCROLL_MEASURE_FAILURES: u32 = 6;
+/// 相邻两次测量的纵向位移小于该值，就认为应用的滚动动画已经停下来了。
+///
+/// 空闲时间到了不等于画面已经停：Windows 11 记事本这类应用的平滑滚动动画
+/// 比 `SCROLL_SETTLE_IDLE_MS` 还长，静止判定触发时内容仍在移动。必须等
+/// 位置本身不再变化才能收尾，否则会把动画中途的位置当成最终位置。
+pub const SCROLL_SETTLE_STABLE_EPSILON_PX: f64 = 2.0;
+
+/// 每个来源进程的滚动比例估计：一个 wheel delta 单位对应多少屏幕像素。
+///
+/// 不同应用的滚轮步长差异很大（行高、缩放、平滑滚动设置都会影响），
+/// 固定常数必然在大多数应用上偏移，因此改为从真实测量中学习。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ScrollRatioEstimate {
+    pub pixels_per_delta: f64,
+    pub samples: u32,
+}
+
+impl Default for ScrollRatioEstimate {
+    fn default() -> Self {
+        Self {
+            pixels_per_delta: DEFAULT_PIXELS_PER_WHEEL_DELTA,
+            samples: 0,
+        }
+    }
+}
+
+impl ScrollRatioEstimate {
+    pub fn predicted_offset(&self, wheel_delta: f64) -> f64 {
+        wheel_delta * self.pixels_per_delta
+    }
+
+    pub fn is_measured(&self) -> bool {
+        self.samples > 0
+    }
+}
+
+pub fn predicted_scroll_offset(estimate: Option<ScrollRatioEstimate>, wheel_delta: f64) -> f64 {
+    estimate.unwrap_or_default().predicted_offset(wheel_delta)
+}
+
+/// 用一次真实测量修正滚动比例。
+///
+/// 只有当测量位移足够大、且方向与滚轮方向一致时才采信，避免把
+/// 误检到的其它高亮块或抖动写进估计值。
+pub fn update_scroll_ratio(
+    current: Option<ScrollRatioEstimate>,
+    wheel_delta: f64,
+    measured_delta_y: f64,
+) -> Option<ScrollRatioEstimate> {
+    if wheel_delta.abs() < f64::EPSILON {
+        return current;
+    }
+    if measured_delta_y.abs() < MIN_MEASURABLE_SCROLL_PX {
+        return current;
+    }
+    if measured_delta_y.signum() != wheel_delta.signum() {
+        return current;
+    }
+
+    let observed = (measured_delta_y / wheel_delta)
+        .clamp(MIN_PIXELS_PER_WHEEL_DELTA, MAX_PIXELS_PER_WHEEL_DELTA);
+    let blended = match current {
+        Some(estimate) if estimate.is_measured() => {
+            estimate.pixels_per_delta * (1.0 - SCROLL_RATIO_SMOOTHING)
+                + observed * SCROLL_RATIO_SMOOTHING
+        }
+        _ => observed,
+    };
+
+    Some(ScrollRatioEstimate {
+        pixels_per_delta: blended.clamp(MIN_PIXELS_PER_WHEEL_DELTA, MAX_PIXELS_PER_WHEEL_DELTA),
+        samples: current.map_or(1, |estimate| estimate.samples.saturating_add(1)),
+    })
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScrollPace {
+    Slow,
+    Fast,
+}
+
+/// 滚轮节奏统计。慢速滚动逐帧跟随；快速滚动改为先隐藏、静止后再吸附，
+/// 避免把操作条渲染在一个还没验证过的位置上。
+///
+/// 用**衰减滑动窗口**而不是固定翻滚窗口：翻滚窗口到期会把计数清零，
+/// 持续快速滚动时节奏会周期性掉回 Slow，操作条随之反复隐藏/显示而闪烁。
+/// 衰减窗口下，稳态累计值约等于 `FAST_SCROLL_DECAY_WINDOW_MS / 事件间隔`，
+/// 即“一个地平线内滚了几格”，语义不变但不会因为窗口边界产生跳变。
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct ScrollBurst {
+    last_event_at_ms: Option<u64>,
+    accumulated_notches: f64,
+    is_fast: bool,
+}
+
+impl ScrollBurst {
+    pub fn register(&mut self, wheel_delta: f64, now_ms: u64) -> ScrollPace {
+        let decay = match self.last_event_at_ms {
+            Some(last) => {
+                let elapsed = now_ms.saturating_sub(last) as f64;
+                (1.0 - elapsed / FAST_SCROLL_DECAY_WINDOW_MS).max(0.0)
+            }
+            None => 0.0,
+        };
+        self.last_event_at_ms = Some(now_ms);
+        self.accumulated_notches =
+            self.accumulated_notches * decay + (wheel_delta / WHEEL_DELTA_UNIT).abs();
+
+        // 迟滞：进入和退出用不同阈值，速度停在边界时不会来回抖。
+        if self.is_fast {
+            if self.accumulated_notches < SLOW_RESUME_NOTCH_THRESHOLD {
+                self.is_fast = false;
+            }
+        } else if self.accumulated_notches >= FAST_SCROLL_NOTCH_THRESHOLD {
+            self.is_fast = true;
+        }
+
+        if self.is_fast {
+            ScrollPace::Fast
+        } else {
+            ScrollPace::Slow
+        }
+    }
+
+    pub fn reset(&mut self) {
+        *self = Self::default();
+    }
+
+    pub fn accumulated_notches(&self) -> f64 {
+        self.accumulated_notches
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScrollTrackerAction {
+    /// 快速滚动进行中：保持隐藏，不做测量。
+    WaitHidden,
+    /// 采样一次真实选区位置并跟随。
+    Measure,
+    /// 已经在静止后完成吸附，结束本次跟随。
+    Finish,
+    /// 连续测量失败：隐藏操作条而不是停在猜测位置。
+    Abandon,
+}
+
+/// 这次测量之后，是否可以认为「已经吸附到最终位置」。
+///
+/// 必须同时满足两个条件，缺一不可：
+/// - `settled`：距最后一个滚轮事件已超过 [`SCROLL_SETTLE_IDLE_MS`]；
+/// - 位移停止：本次测得的 y 相对上一次几乎没变。
+///
+/// 只看 `settled` 是不够的——平滑滚动动画可能比静止阈值更长，此时内容仍在
+/// 移动，用那一帧的位置收尾会把操作条永久留在动画中途的位置上。
+pub fn settled_measurement_is_stable(settled: bool, measured_delta_y: f64) -> bool {
+    settled && measured_delta_y.abs() < SCROLL_SETTLE_STABLE_EPSILON_PX
+}
+
+/// 决定跟随线程这一帧该做什么。
+///
+/// `settled_measurement_stable` 表示「已经在静止之后测到过一次、且那次测量
+/// 相对上一次几乎没有位移」。只有空闲时间够是不够的——平滑滚动动画可能比
+/// 静止阈值更长，此时位置还在变，收尾会把中途位置定死。
+pub fn scroll_tracker_action(
+    pace: ScrollPace,
+    idle_ms: u64,
+    consecutive_failures: u32,
+    settled_measurement_stable: bool,
+) -> ScrollTrackerAction {
+    if consecutive_failures >= MAX_SCROLL_MEASURE_FAILURES {
+        return ScrollTrackerAction::Abandon;
+    }
+
+    let settled = idle_ms >= SCROLL_SETTLE_IDLE_MS;
+    if settled && settled_measurement_stable {
+        return ScrollTrackerAction::Finish;
+    }
+    if pace == ScrollPace::Fast && !settled {
+        return ScrollTrackerAction::WaitHidden;
+    }
+
+    ScrollTrackerAction::Measure
+}
+
+/// 选区滚出可视区域时应当隐藏，而不是把操作条留在无关内容上。
+pub fn selection_still_trackable(selection_rect: Rect, viewport: Rect) -> bool {
+    let visible_top = selection_rect.y.max(viewport.y);
+    let visible_bottom =
+        (selection_rect.y + selection_rect.height).min(viewport.y + viewport.height);
+    let visible_height = visible_bottom - visible_top;
+    let visible_left = selection_rect.x.max(viewport.x);
+    let visible_right = (selection_rect.x + selection_rect.width).min(viewport.x + viewport.width);
+
+    visible_height >= (selection_rect.height * 0.5).min(6.0) && visible_right - visible_left >= 8.0
+}
+
 fn is_browser_process(source_app: &str) -> bool {
     let process_name = source_app
         .rsplit(|ch| ch == '\\' || ch == '/')

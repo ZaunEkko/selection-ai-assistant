@@ -14,8 +14,8 @@ use windows_sys::Win32::{
     Foundation::{CloseHandle, GlobalFree, BOOL, LPARAM, LRESULT, POINT, RECT as WinRect, WPARAM},
     Graphics::Gdi::{
         BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject, GetDC,
-        GetDIBits, GetPixel, GetWindowDC, ReleaseDC, SelectObject, BITMAPINFO, BITMAPINFOHEADER,
-        BI_RGB, DIB_RGB_COLORS, HDC, RGBQUAD, SRCCOPY,
+        GetDIBits, ReleaseDC, SelectObject, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS,
+        RGBQUAD, SRCCOPY,
     },
     Security::{GetTokenInformation, TokenElevation, TOKEN_ELEVATION, TOKEN_QUERY},
     System::{
@@ -60,10 +60,13 @@ use crate::{
     input_monitor::events::{
         consume_pending_selection, handle_hotkey_state,
         hover_action_for_pending_selection_when_idle, manual_hotkey_trigger_key,
-        selection_geometry_matches_drag_gesture, should_follow_scroll_for_source,
-        visible_floating_button_action_when_idle, HotkeyAction, HotkeyKeyState, MouseButtonEvent,
-        PendingHotkeyAction, PendingSelection, PendingSelectionHoverAction, VisibleFloatingButton,
-        VisibleFloatingButtonAction,
+        predicted_scroll_offset, scroll_tracker_action, selection_geometry_matches_drag_gesture,
+        selection_still_trackable, settled_measurement_is_stable, should_follow_scroll_for_source,
+        update_scroll_ratio, visible_floating_button_action_when_idle, HotkeyAction,
+        HotkeyKeyState, MouseButtonEvent, PendingHotkeyAction, PendingSelection,
+        PendingSelectionHoverAction, ScrollBurst, ScrollPace, ScrollRatioEstimate,
+        ScrollTrackerAction, VisibleFloatingButton, VisibleFloatingButtonAction,
+        SCROLL_SETTLE_IDLE_MS,
     },
     platform::{
         ClipboardBackend, InputMonitor, PermissionChecker, PlatformBackend, PlatformFeatureStatus,
@@ -89,11 +92,21 @@ const KEY_DOWN: i16 = 0x8000u16 as i16;
 const TARGET_CONTROLS_CLOSE_DELAY: Duration = Duration::from_millis(180);
 const CLIPBOARD_RESTORE_RETRY_COUNT: usize = 2;
 const CLIPBOARD_RESTORE_RETRY_DELAY: Duration = Duration::from_millis(30);
-const SCROLL_FOLLOW_RETRY_COUNT: usize = 2;
-const SCROLL_FOLLOW_RETRY_DELAY: Duration = Duration::from_millis(50);
-const SCROLL_FOLLOW_DEBOUNCE: Duration = Duration::from_millis(120);
 const SCROLL_FOLLOW_MAX_PLACEMENT_HEIGHT: f64 = 36.0;
-const SCROLL_PREDICT_PIXELS_PER_DELTA: f64 = 0.85;
+/// 跟随线程的采样间隔。一次采样只做一次 BitBlt + 内存扫描，成本在毫秒级，
+/// 因此可以按这个节奏持续测量真实选区位置，而不是靠预测累积误差。
+const SCROLL_TRACK_SAMPLE_INTERVAL: Duration = Duration::from_millis(20);
+/// 跟随会话的兜底上限，避免任何异常情况下线程常驻。
+const SCROLL_TRACK_MAX_SESSION: Duration = Duration::from_secs(20);
+/// 跟踪时以预测位置为中心的搜索带宽度/高度余量。
+const SCROLL_TRACK_SEARCH_PADDING_X: f64 = 80.0;
+const SCROLL_TRACK_SEARCH_PADDING_Y: f64 = 160.0;
+/// UIA 回退的采样间隔（以采样次数计）。跨进程 COM 调用比像素测量贵得多，
+/// 只在视觉测量失败且到达该间隔时才尝试。
+const UIA_MEASURE_SAMPLE_STRIDE: u64 = 5;
+/// 单次像素捕获的上限，避免异常矩形导致巨额分配。
+const MAX_CAPTURE_WIDTH: i32 = 6000;
+const MAX_CAPTURE_HEIGHT: i32 = 4000;
 
 #[cfg(debug_assertions)]
 fn trace_selection_monitor(args: std::fmt::Arguments<'_>) {
@@ -167,6 +180,7 @@ fn start(app: tauri::AppHandle) {
         let mut visible_floating_button: Option<VisibleFloatingButton> = None;
         let mut pointer_inside_target_controls = false;
         let mut pending_hotkey = PendingHotkeyAction::default();
+        let mut scroll_burst = ScrollBurst::default();
         let monitor_started_at = Instant::now();
 
         loop {
@@ -177,6 +191,7 @@ fn start(app: tauri::AppHandle) {
                     &mut pending_selection,
                     &mut visible_floating_button,
                     &mut pointer_inside_target_controls,
+                    &mut scroll_burst,
                     event,
                     elapsed_ms(monitor_started_at),
                 );
@@ -215,6 +230,7 @@ fn start(app: tauri::AppHandle) {
                     &mut pending_selection,
                     &mut visible_floating_button,
                     &mut pointer_inside_target_controls,
+                    &mut scroll_burst,
                     event,
                     elapsed_ms(monitor_started_at),
                 ),
@@ -332,6 +348,7 @@ fn handle_mouse_event(
     pending_selection: &mut Option<PendingSelection>,
     visible_floating_button: &mut Option<VisibleFloatingButton>,
     pointer_inside_target_controls: &mut bool,
+    scroll_burst: &mut ScrollBurst,
     event: MouseButtonEvent,
     now_ms: u64,
 ) {
@@ -341,7 +358,13 @@ fn handle_mouse_event(
             .iter()
             .any(|window| crate::input_monitor::events::rect_contains(*window, position));
         if !in_assistant_window {
-            follow_visible_floating_button_after_scroll(app, visible_floating_button, delta);
+            follow_visible_floating_button_after_scroll(
+                app,
+                visible_floating_button,
+                scroll_burst,
+                delta,
+                now_ms,
+            );
         }
         return;
     }
@@ -401,6 +424,8 @@ fn handle_mouse_event(
     match event {
         MouseButtonEvent::Down(point) => {
             *drag_start = Some(point);
+            // 新的一次交互开始，之前的滚轮节奏统计不应继续影响快慢判定。
+            scroll_burst.reset();
             consume_pending_selection(pending_selection);
         }
         MouseButtonEvent::Up(up_point) => {
@@ -546,71 +571,208 @@ impl SelectionCaptureOptions {
     }
 }
 
+/// 一块已经读到内存里的屏幕像素。
+///
+/// 之前的实现对搜索区域内的**每个像素**调用一次 `GetPixel`：一次滚动修正的
+/// 搜索带约 930x660，即约 61 万次 GDI 往返，实测量级在数百毫秒到数秒之间，
+/// 远超跟随逻辑给它的时间预算，因此修正几乎从来没有真正生效过。
+///
+/// 改成一次 `BitBlt` + `GetDIBits` 把区域读进内存后按数组扫描，
+/// 同样的区域只需要一次 GDI 调用，成本降到毫秒级。
+struct PixelBuffer {
+    origin_x: i32,
+    origin_y: i32,
+    width: i32,
+    height: i32,
+    bgra: Vec<u8>,
+}
+
+impl PixelBuffer {
+    /// 从屏幕 DC 抓取指定区域。
+    ///
+    /// 使用屏幕 DC 而不是 `GetWindowDC(hwnd)`：GPU 合成的窗口
+    /// （Electron / Chromium，例如 VS Code）经常无法通过窗口 DC 读回内容。
+    fn capture(rect: Rect) -> Option<Self> {
+        let origin_x = rect.x.floor() as i32;
+        let origin_y = rect.y.floor() as i32;
+        let width = rect.width.ceil() as i32;
+        let height = rect.height.ceil() as i32;
+        if width <= 0 || height <= 0 || width > MAX_CAPTURE_WIDTH || height > MAX_CAPTURE_HEIGHT {
+            return None;
+        }
+
+        let screen_dc = unsafe { GetDC(null_mut()) };
+        if screen_dc.is_null() {
+            return None;
+        }
+        let memory_dc = unsafe { CreateCompatibleDC(screen_dc) };
+        if memory_dc.is_null() {
+            unsafe { ReleaseDC(null_mut(), screen_dc) };
+            return None;
+        }
+        let bitmap = unsafe { CreateCompatibleBitmap(screen_dc, width, height) };
+        if bitmap.is_null() {
+            unsafe {
+                DeleteDC(memory_dc);
+                ReleaseDC(null_mut(), screen_dc);
+            }
+            return None;
+        }
+
+        let previous = unsafe { SelectObject(memory_dc, bitmap) };
+        let copied = unsafe {
+            BitBlt(
+                memory_dc, 0, 0, width, height, screen_dc, origin_x, origin_y, SRCCOPY,
+            )
+        };
+
+        let mut bgra = vec![0_u8; (width as usize) * (height as usize) * 4];
+        let scanlines = if copied == 0 {
+            0
+        } else {
+            let mut bitmap_info = BITMAPINFO {
+                bmiHeader: BITMAPINFOHEADER {
+                    biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+                    biWidth: width,
+                    biHeight: -height,
+                    biPlanes: 1,
+                    biBitCount: 32,
+                    biCompression: BI_RGB,
+                    biSizeImage: (width * height * 4) as u32,
+                    biXPelsPerMeter: 0,
+                    biYPelsPerMeter: 0,
+                    biClrUsed: 0,
+                    biClrImportant: 0,
+                },
+                bmiColors: [RGBQUAD {
+                    rgbBlue: 0,
+                    rgbGreen: 0,
+                    rgbRed: 0,
+                    rgbReserved: 0,
+                }],
+            };
+            unsafe {
+                GetDIBits(
+                    memory_dc,
+                    bitmap,
+                    0,
+                    height as u32,
+                    bgra.as_mut_ptr() as *mut c_void,
+                    &mut bitmap_info,
+                    DIB_RGB_COLORS,
+                )
+            }
+        };
+
+        unsafe {
+            SelectObject(memory_dc, previous);
+            DeleteObject(bitmap);
+            DeleteDC(memory_dc);
+            ReleaseDC(null_mut(), screen_dc);
+        }
+
+        (scanlines != 0).then_some(Self {
+            origin_x,
+            origin_y,
+            width,
+            height,
+            bgra,
+        })
+    }
+
+    fn pixel(&self, screen_x: i32, screen_y: i32) -> Option<(u8, u8, u8)> {
+        let local_x = screen_x - self.origin_x;
+        let local_y = screen_y - self.origin_y;
+        if local_x < 0 || local_y < 0 || local_x >= self.width || local_y >= self.height {
+            return None;
+        }
+
+        let index = ((local_y as usize) * (self.width as usize) + local_x as usize) * 4;
+        let pixel = self.bgra.get(index..index + 4)?;
+        Some((pixel[2], pixel[1], pixel[0]))
+    }
+}
+
 fn visual_selection_from_drag(
     source_window_handle: isize,
     down_point: Point,
     up_point: Point,
 ) -> Option<SelectionVisualState> {
     let window_rect = source_window_screen_rect(source_window_handle)?;
-    let hwnd = source_window_handle as *mut c_void;
-    let hdc = unsafe { GetWindowDC(hwnd) };
-    if hdc.is_null() {
-        return None;
-    }
+    let search_rect = drag_visual_search_rect(window_rect, down_point, up_point)?;
+    let buffer = PixelBuffer::capture(search_rect)?;
 
     let mid_point = Point {
         x: (down_point.x + up_point.x) / 2.0,
         y: (down_point.y + up_point.y) / 2.0,
     };
     let points = [down_point, up_point, mid_point];
-    let color = sample_selection_color(hdc, window_rect, &points)
-        .filter(selection_color_looks_like_highlight);
-    let rect = color.and_then(|color| {
-        let search_rect = drag_visual_search_rect(window_rect, down_point, up_point)?;
-        find_visual_selection_rect_in_dc(
-            hdc,
-            window_rect,
-            search_rect,
-            color,
-            Some(down_point.y.min(up_point.y)),
-            Some(down_point.x.min(up_point.x)),
-        )
-        .map(|rect| SelectionVisualState {
-            source_window_handle,
-            color,
-            rect,
-        })
-    });
+    let color =
+        sample_selection_color(&buffer, &points).filter(selection_color_looks_like_highlight)?;
 
-    unsafe {
-        ReleaseDC(hwnd, hdc);
-    }
-    rect
+    find_visual_selection_rect_in_buffer(
+        &buffer,
+        search_rect,
+        color,
+        Some(down_point.y.min(up_point.y)),
+        Some(down_point.x.min(up_point.x)),
+        &[],
+    )
+    .map(|rect| SelectionVisualState {
+        source_window_handle,
+        color,
+        rect,
+    })
 }
 
-fn visual_selection_from_stored(visual: SelectionVisualState) -> Option<SelectionVisualState> {
-    let window_rect = source_window_screen_rect(visual.source_window_handle)?;
-    let search_rect = stored_visual_search_rect(window_rect, visual.rect)?;
-    let hwnd = visual.source_window_handle as *mut c_void;
-    let hdc = unsafe { GetWindowDC(hwnd) };
-    if hdc.is_null() {
-        return None;
-    }
-
-    let rect = find_visual_selection_rect_in_dc(
-        hdc,
-        window_rect,
+/// 在指定搜索区域内重新定位已知颜色的选区高亮。
+///
+/// `excluded_rects` 用于排除助手自己的置顶窗口：屏幕 DC 抓到的像素里
+/// 也包含迷你操作条本身，不排除的话它可能把自己的像素当成选区。
+fn visual_selection_within(
+    visual: SelectionVisualState,
+    search_rect: Rect,
+    excluded_rects: &[Rect],
+) -> Option<SelectionVisualState> {
+    let buffer = PixelBuffer::capture(search_rect)?;
+    find_visual_selection_rect_in_buffer(
+        &buffer,
         search_rect,
         visual.color,
         None,
         Some(visual.rect.x + visual.rect.width / 2.0),
+        excluded_rects,
     )
-    .map(|rect| SelectionVisualState { rect, ..visual });
+    .map(|rect| SelectionVisualState { rect, ..visual })
+}
 
-    unsafe {
-        ReleaseDC(hwnd, hdc);
-    }
-    rect
+/// 以预测位置为中心的窄搜索带。
+///
+/// 跟踪时已经知道选区大概会落在哪里，只需要覆盖预测误差，
+/// 因此比拖拽首次定位用的搜索区小得多。
+fn tracked_visual_search_rect(
+    window_rect: Rect,
+    predicted_rect: Rect,
+    previous_rect: Rect,
+) -> Option<Rect> {
+    let top = predicted_rect.y.min(previous_rect.y) - SCROLL_TRACK_SEARCH_PADDING_Y;
+    let bottom = (predicted_rect.y + predicted_rect.height)
+        .max(previous_rect.y + previous_rect.height)
+        + SCROLL_TRACK_SEARCH_PADDING_Y;
+    let left = predicted_rect.x.min(previous_rect.x) - SCROLL_TRACK_SEARCH_PADDING_X;
+    let right = (predicted_rect.x + predicted_rect.width)
+        .max(previous_rect.x + previous_rect.width)
+        + SCROLL_TRACK_SEARCH_PADDING_X;
+
+    intersect_rects(
+        Rect {
+            x: left,
+            y: top,
+            width: (right - left).max(1.0),
+            height: (bottom - top).max(1.0),
+        },
+        window_rect,
+    )
 }
 
 fn source_window_screen_rect(source_window_handle: isize) -> Option<Rect> {
@@ -648,22 +810,6 @@ fn drag_visual_search_rect(window_rect: Rect, down_point: Point, up_point: Point
     )
 }
 
-fn stored_visual_search_rect(window_rect: Rect, previous_rect: Rect) -> Option<Rect> {
-    let left = previous_rect.x - 220.0;
-    let right = previous_rect.x + previous_rect.width + 220.0;
-    let top = previous_rect.y - 320.0;
-    let bottom = previous_rect.y + previous_rect.height + 320.0;
-    intersect_rects(
-        Rect {
-            x: left,
-            y: top,
-            width: (right - left).max(1.0),
-            height: (bottom - top).max(1.0),
-        },
-        window_rect,
-    )
-}
-
 fn intersect_rects(a: Rect, b: Rect) -> Option<Rect> {
     let left = a.x.max(b.x);
     let top = a.y.max(b.y);
@@ -677,7 +823,7 @@ fn intersect_rects(a: Rect, b: Rect) -> Option<Rect> {
     })
 }
 
-fn sample_selection_color(hdc: HDC, window_rect: Rect, points: &[Point]) -> Option<(u8, u8, u8)> {
+fn sample_selection_color(buffer: &PixelBuffer, points: &[Point]) -> Option<(u8, u8, u8)> {
     let mut buckets: HashMap<(u8, u8, u8), ColorBucket> = HashMap::new();
 
     for point in points {
@@ -685,11 +831,7 @@ fn sample_selection_color(hdc: HDC, window_rect: Rect, points: &[Point]) -> Opti
             for x_offset in (-12..=12).step_by(3) {
                 let screen_x = point.x.round() as i32 + x_offset;
                 let screen_y = point.y.round() as i32 + y_offset;
-                if !point_in_rect(screen_x, screen_y, window_rect) {
-                    continue;
-                }
-                let Some((red, green, blue)) = pixel_rgb(hdc, window_rect, screen_x, screen_y)
-                else {
+                let Some((red, green, blue)) = buffer.pixel(screen_x, screen_y) else {
                     continue;
                 };
                 let key = (red / 16, green / 16, blue / 16);
@@ -713,13 +855,13 @@ fn sample_selection_color(hdc: HDC, window_rect: Rect, points: &[Point]) -> Opti
     ))
 }
 
-fn find_visual_selection_rect_in_dc(
-    hdc: HDC,
-    window_rect: Rect,
+fn find_visual_selection_rect_in_buffer(
+    buffer: &PixelBuffer,
     search_rect: Rect,
     color: (u8, u8, u8),
     preferred_y: Option<f64>,
     preferred_x: Option<f64>,
+    excluded_rects: &[Rect],
 ) -> Option<Rect> {
     let left = search_rect.x.round() as i32;
     let right = (search_rect.x + search_rect.width).round() as i32;
@@ -735,9 +877,11 @@ fn find_visual_selection_rect_in_dc(
         let mut max_run = 0;
 
         for x in left..right {
-            let matches = pixel_rgb(hdc, window_rect, x, y)
-                .map(|pixel| colors_are_close(pixel, color))
-                .unwrap_or(false);
+            let matches = !point_in_any_rect(x, y, excluded_rects)
+                && buffer
+                    .pixel(x, y)
+                    .map(|pixel| colors_are_close(pixel, color))
+                    .unwrap_or(false);
             if matches {
                 min_x = Some(min_x.map_or(x, |current| current.min(x)));
                 max_x = Some(max_x.map_or(x, |current| current.max(x)));
@@ -815,23 +959,8 @@ fn point_in_rect(x: i32, y: i32, rect: Rect) -> bool {
         && y as f64 <= rect.y + rect.height
 }
 
-fn pixel_rgb(hdc: HDC, window_rect: Rect, screen_x: i32, screen_y: i32) -> Option<(u8, u8, u8)> {
-    let local_x = screen_x - window_rect.x.round() as i32;
-    let local_y = screen_y - window_rect.y.round() as i32;
-    if local_x < 0 || local_y < 0 {
-        return None;
-    }
-
-    let color = unsafe { GetPixel(hdc, local_x, local_y) };
-    if color == u32::MAX {
-        return None;
-    }
-
-    Some((
-        (color & 0xff) as u8,
-        ((color >> 8) & 0xff) as u8,
-        ((color >> 16) & 0xff) as u8,
-    ))
+fn point_in_any_rect(x: i32, y: i32, rects: &[Rect]) -> bool {
+    rects.iter().any(|rect| point_in_rect(x, y, *rect))
 }
 
 fn selection_color_looks_like_highlight(color: &(u8, u8, u8)) -> bool {
@@ -1050,14 +1179,131 @@ fn floating_button_window_position(app: &tauri::AppHandle) -> Option<Point> {
 }
 
 fn clear_selection_and_hide_button(app: &tauri::AppHandle) {
-    app.state::<AppState>().clear_latest_selection();
+    let state = app.state::<AppState>();
+    // 让正在运行的跟随会话立刻作废：generation 现在只代表“选区身份”，
+    // 不再每次滚轮都自增。
+    state.next_scroll_follow_generation();
+    state.clear_latest_selection();
     let _ = hide_floating_button(app.clone());
+}
+
+/// 一次滚动跟随会话的共享状态。
+///
+/// 旧实现为**每个滚轮事件**都 spawn 一个线程，并用 generation 让新事件取消
+/// 上一个线程；连续滚动时修正永远来不及落地。现在整段滚动只有一个跟随线程，
+/// 它按固定节奏测量选区真实位置，因此误差不会随滚动累积。
+struct ScrollTracker {
+    session_id: u64,
+    running: bool,
+    generation: u64,
+    started_at: Instant,
+    last_wheel_at: Instant,
+    pace: ScrollPace,
+    /// 自上次成功测量以来累计的滚轮 delta，用于反推真实滚动比例。
+    pending_wheel_delta: f64,
+    /// 当前认为选区所在的矩形（预测或测量得到）。
+    tracked_rect: Rect,
+    /// 上一次真实测量得到的 y，用于判断动画是否已经停下来。
+    last_measured_y: f64,
+    /// 上一次「动画已停」时的 y，作为学习滚动比例的位移起点。
+    ///
+    /// 比例必须用整段位移去算：动画中途的采样只走完了一小部分，
+    /// 拿它除以整段 wheel delta 会把比例算小一个数量级。
+    ratio_anchor_y: f64,
+    /// 这一段位移是否全程都在测量之下。
+    ///
+    /// 快速滚动期间不测量（操作条已隐藏），但滚轮 delta 仍在累加。此时
+    /// 「整段位移 ÷ 整段 delta」是假的：分母涨了几十格，分子却只有恢复
+    /// 测量后那一点点。实测这会把比例从 0.82 拖到 0.52，必须丢弃。
+    ratio_burst_valid: bool,
+    failures: u32,
+    /// 静止之后是否已经测到一次「位置不再变化」的结果。
+    ///
+    /// 不能只看「静止后测过一次」：平滑滚动动画可能比静止阈值更长，
+    /// 那一次测量拿到的是动画中途的位置。
+    settled_measurement_stable: bool,
+    /// 是否因为快速滚动而处于隐藏状态，用于避免重复调用 hide。
+    hidden: bool,
+    process_name: String,
+    source_window_handle: isize,
+}
+
+#[derive(Debug, Clone)]
+struct ScrollTrackerSnapshot {
+    generation: u64,
+    started_at: Instant,
+    last_wheel_at: Instant,
+    pace: ScrollPace,
+    pending_wheel_delta: f64,
+    tracked_rect: Rect,
+    last_measured_y: f64,
+    ratio_anchor_y: f64,
+    ratio_burst_valid: bool,
+    failures: u32,
+    settled_measurement_stable: bool,
+    process_name: String,
+    source_window_handle: isize,
+}
+
+fn scroll_tracker() -> &'static Mutex<Option<ScrollTracker>> {
+    static TRACKER: OnceLock<Mutex<Option<ScrollTracker>>> = OnceLock::new();
+    TRACKER.get_or_init(|| Mutex::new(None))
+}
+
+fn next_scroll_session_id() -> u64 {
+    static NEXT_ID: OnceLock<Mutex<u64>> = OnceLock::new();
+    let slot = NEXT_ID.get_or_init(|| Mutex::new(0));
+    let mut id = slot.lock().expect("scroll session id mutex poisoned");
+    *id = id.saturating_add(1);
+    *id
+}
+
+/// 每个来源进程学习到的滚动比例。
+fn scroll_ratio_cache() -> &'static Mutex<HashMap<String, ScrollRatioEstimate>> {
+    static CACHE: OnceLock<Mutex<HashMap<String, ScrollRatioEstimate>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn cached_scroll_ratio(process_name: &str) -> Option<ScrollRatioEstimate> {
+    scroll_ratio_cache().lock().ok()?.get(process_name).copied()
+}
+
+fn store_scroll_ratio(process_name: &str, estimate: ScrollRatioEstimate) {
+    if let Ok(mut cache) = scroll_ratio_cache().lock() {
+        cache.insert(process_name.to_string(), estimate);
+    }
+}
+
+fn scroll_tracker_snapshot(session_id: u64) -> Option<ScrollTrackerSnapshot> {
+    let guard = scroll_tracker().lock().ok()?;
+    let tracker = guard.as_ref()?;
+    if tracker.session_id != session_id || !tracker.running {
+        return None;
+    }
+
+    Some(ScrollTrackerSnapshot {
+        generation: tracker.generation,
+        started_at: tracker.started_at,
+        last_wheel_at: tracker.last_wheel_at,
+        pace: tracker.pace,
+        pending_wheel_delta: tracker.pending_wheel_delta,
+        tracked_rect: tracker.tracked_rect,
+        last_measured_y: tracker.last_measured_y,
+        ratio_anchor_y: tracker.ratio_anchor_y,
+        ratio_burst_valid: tracker.ratio_burst_valid,
+        failures: tracker.failures,
+        settled_measurement_stable: tracker.settled_measurement_stable,
+        process_name: tracker.process_name.clone(),
+        source_window_handle: tracker.source_window_handle,
+    })
 }
 
 fn follow_visible_floating_button_after_scroll(
     app: &tauri::AppHandle,
     visible_floating_button: &mut Option<VisibleFloatingButton>,
+    scroll_burst: &mut ScrollBurst,
     wheel_delta: f64,
+    now_ms: u64,
 ) {
     let Some(visible) = visible_floating_button.as_mut() else {
         return;
@@ -1070,164 +1316,368 @@ fn follow_visible_floating_button_after_scroll(
     }
 
     let state = app.state::<AppState>();
-    let generation = state.next_scroll_follow_generation();
-    let predicted_delta_y = wheel_delta * SCROLL_PREDICT_PIXELS_PER_DELTA;
-    let base_window_position = state
-        .latest_floating_button_window_position()
-        .or_else(|| floating_button_window_position(app))
-        .unwrap_or(visible.window_position);
-    let fallback_window_position = Point {
-        x: base_window_position.x,
-        y: base_window_position.y + predicted_delta_y,
+    let generation = state.scroll_follow_generation();
+    let Some(source_window_handle) = state.latest_selection_window_handle() else {
+        return;
     };
+    let process_name = state
+        .latest_selection()
+        .map(|context| context.selection.source_app)
+        .unwrap_or_default();
+
+    // 起始矩形优先取跟随会话里最近一次的测量结果，其次才是事件循环里
+    // 记录的预测值，避免上一轮滚动的预测误差被当成新的起点。
+    let tracked_rect = scroll_tracker().lock().ok().and_then(|guard| {
+        guard
+            .as_ref()
+            .and_then(|tracker| (tracker.generation == generation).then_some(tracker.tracked_rect))
+    });
+    let Some(current_rect) = tracked_rect.or(visible.selection_rect).or_else(|| {
+        state
+            .latest_selection_visual()
+            .map(|visual| scroll_follow_placement_rect(visual.rect))
+    }) else {
+        return;
+    };
+
+    let pace = scroll_burst.register(wheel_delta, now_ms);
+    let predicted_delta_y =
+        predicted_scroll_offset(cached_scroll_ratio(&process_name), wheel_delta);
+    let predicted_rect = Rect {
+        y: current_rect.y + predicted_delta_y,
+        ..current_rect
+    };
+
+    visible.selection_rect = Some(predicted_rect);
     visible.selection_anchor.y += predicted_delta_y;
-    visible.selection_rect = visible.selection_rect.map(|rect| Rect {
-        y: rect.y + predicted_delta_y,
-        ..rect
-    });
 
-    let predicted_visual_rect = visible.selection_rect.or_else(|| {
-        state.latest_selection_visual().map(|visual| {
-            scroll_follow_placement_rect(Rect {
-                y: visual.rect.y + predicted_delta_y,
-                ..visual.rect
-            })
-        })
-    });
-    visible.window_position = predicted_visual_rect
-        .and_then(|rect| {
-            floating_button_position_for_selection(app, visible.selection_anchor, &[rect]).ok()
-        })
-        .unwrap_or(fallback_window_position);
-    state.store_latest_floating_button_window_position(visible.window_position);
+    let session_id = next_scroll_session_id();
+    let mut started_session = None;
+    let mut hide_now = false;
+    if let Ok(mut guard) = scroll_tracker().lock() {
+        let restart = guard
+            .as_ref()
+            .map(|tracker| !tracker.running || tracker.generation != generation)
+            .unwrap_or(true);
 
-    if show_floating_button_at_position(app.clone(), visible.window_position).is_ok() {
-        trace_selection_monitor(format_args!(
-            "floating button predicted scroll follow: generation={generation}, delta_y={predicted_delta_y}, window_position={:?}",
-            visible.window_position
-        ));
+        if restart {
+            *guard = Some(ScrollTracker {
+                session_id,
+                running: true,
+                generation,
+                started_at: Instant::now(),
+                last_wheel_at: Instant::now(),
+                pace,
+                pending_wheel_delta: wheel_delta,
+                tracked_rect: predicted_rect,
+                last_measured_y: current_rect.y,
+                ratio_anchor_y: current_rect.y,
+                // 快速滚动一开始就不测量，这段位移不能用来学比例。
+                ratio_burst_valid: pace != ScrollPace::Fast,
+                failures: 0,
+                settled_measurement_stable: false,
+                hidden: pace == ScrollPace::Fast,
+                process_name,
+                source_window_handle,
+            });
+            started_session = Some(session_id);
+            hide_now = pace == ScrollPace::Fast;
+        } else if let Some(tracker) = guard.as_mut() {
+            tracker.last_wheel_at = Instant::now();
+            tracker.pace = pace;
+            tracker.pending_wheel_delta += wheel_delta;
+            tracker.tracked_rect = predicted_rect;
+            tracker.settled_measurement_stable = false;
+            // 只在进入快速滚动的那一刻隐藏一次，避免每个滚轮事件都调用 hide。
+            hide_now = pace == ScrollPace::Fast && !tracker.hidden;
+            if hide_now {
+                tracker.hidden = true;
+            }
+        }
     }
 
-    let app = app.clone();
-    let predicted_window_position = visible.window_position;
+    if pace == ScrollPace::Fast {
+        // 快速滚动：不在没验证过的位置上渲染操作条，先隐藏，静止后再吸附。
+        if hide_now {
+            let _ = hide_floating_button(app.clone());
+            trace_selection_monitor(format_args!(
+                "floating button hidden during fast scroll: notches={:.2}",
+                scroll_burst.accumulated_notches()
+            ));
+        }
+    } else if let Ok(position) = floating_button_position_for_selection(
+        app,
+        Point {
+            x: predicted_rect.x,
+            y: predicted_rect.y,
+        },
+        &[predicted_rect],
+    ) {
+        if show_floating_button_at_position(app.clone(), position).is_ok() {
+            visible.window_position = position;
+            state.store_latest_floating_button_window_position(position);
+        }
+    }
+
+    if let Some(session_id) = started_session {
+        spawn_scroll_tracker(app.clone(), session_id);
+    }
+}
+
+fn spawn_scroll_tracker(app: tauri::AppHandle, session_id: u64) {
     thread::spawn(move || {
-        thread::sleep(SCROLL_FOLLOW_DEBOUNCE);
-        if app.state::<AppState>().scroll_follow_generation() != generation {
+        let mut sample_index: u64 = 0;
+        loop {
+            thread::sleep(SCROLL_TRACK_SAMPLE_INTERVAL);
+            sample_index = sample_index.saturating_add(1);
+
+            let Some(snapshot) = scroll_tracker_snapshot(session_id) else {
+                return;
+            };
+            if app.state::<AppState>().scroll_follow_generation() != snapshot.generation
+                || snapshot.started_at.elapsed() > SCROLL_TRACK_MAX_SESSION
+            {
+                finish_scroll_tracker(&app, session_id, false);
+                return;
+            }
+
+            let idle_ms = snapshot.last_wheel_at.elapsed().as_millis() as u64;
+            match scroll_tracker_action(
+                snapshot.pace,
+                idle_ms,
+                snapshot.failures,
+                snapshot.settled_measurement_stable,
+            ) {
+                ScrollTrackerAction::WaitHidden => {
+                    // 这一帧没测量，本段位移不再完整，作废比例学习窗口。
+                    invalidate_scroll_ratio_burst(session_id);
+                    continue;
+                }
+                ScrollTrackerAction::Finish => {
+                    finish_scroll_tracker(&app, session_id, false);
+                    return;
+                }
+                ScrollTrackerAction::Abandon => {
+                    trace_selection_monitor(format_args!(
+                        "floating button hidden after {} failed scroll measurements",
+                        snapshot.failures
+                    ));
+                    finish_scroll_tracker(&app, session_id, true);
+                    return;
+                }
+                ScrollTrackerAction::Measure => {
+                    let settled = idle_ms >= SCROLL_SETTLE_IDLE_MS;
+                    // UIA 是跨进程 COM 调用，成本远高于像素测量，不能每帧都试。
+                    let allow_uia = sample_index % UIA_MEASURE_SAMPLE_STRIDE == 0 || settled;
+                    measure_and_follow_selection(&app, session_id, &snapshot, allow_uia, settled);
+                }
+            }
+        }
+    });
+}
+
+fn measure_and_follow_selection(
+    app: &tauri::AppHandle,
+    session_id: u64,
+    snapshot: &ScrollTrackerSnapshot,
+    allow_uia: bool,
+    settled: bool,
+) {
+    let Some(measured_rect) = measure_tracked_selection_rect(app, snapshot, allow_uia) else {
+        record_scroll_measure_failure(session_id);
+        return;
+    };
+
+    // 只跟随纵向位移：横向沿用原选区的 x/width，避免检测抖动让操作条左右乱跳。
+    let placement_rect = Rect {
+        x: snapshot.tracked_rect.x,
+        width: snapshot.tracked_rect.width,
+        y: measured_rect.y,
+        height: measured_rect.height,
+    };
+
+    if let Some(window_rect) = source_window_screen_rect(snapshot.source_window_handle) {
+        if !selection_still_trackable(placement_rect, window_rect) {
+            trace_selection_monitor(format_args!(
+                "floating button hidden: selection scrolled out of source window"
+            ));
+            finish_scroll_tracker(app, session_id, true);
             return;
         }
-        for attempt in 0..SCROLL_FOLLOW_RETRY_COUNT {
-            if let Some(window_position) = refresh_visible_floating_button_from_visual(
-                &app,
-                predicted_visual_rect,
-                predicted_window_position,
-            ) {
-                trace_selection_monitor(format_args!(
-                    "floating button corrected scroll via visual selection: attempt={}, generation={}, window_position={window_position:?}",
-                    attempt + 1,
-                    generation
-                ));
-                return;
-            }
-            if let Some(window_position) = refresh_visible_floating_button_from_uia(
-                &app,
-                predicted_visual_rect,
-                predicted_window_position,
-            ) {
-                trace_selection_monitor(format_args!(
-                    "floating button corrected scroll via UIA: attempt={}, generation={}, window_position={window_position:?}",
-                    attempt + 1,
-                    generation
-                ));
-                return;
-            }
-            thread::sleep(SCROLL_FOLLOW_RETRY_DELAY);
-        }
+    }
 
-        trace_selection_monitor(format_args!(
-            "floating button kept predicted position after scroll: selection rect could not be refreshed"
-        ));
-    });
-}
-
-fn refresh_visible_floating_button_from_visual(
-    app: &tauri::AppHandle,
-    predicted_rect: Option<Rect>,
-    _predicted_window_position: Point,
-) -> Option<Point> {
-    let state = app.state::<AppState>();
-    let visual = state.latest_selection_visual()?;
-    let refreshed = predicted_rect
-        .and_then(|rect| visual_selection_from_stored(SelectionVisualState { rect, ..visual }))
-        .or_else(|| visual_selection_from_stored(visual))?;
-    let placement_rect = predicted_rect.map_or(refreshed.rect, |rect| Rect {
-        x: rect.x,
-        width: rect.width,
-        y: refreshed.rect.y,
-        height: refreshed.rect.height,
-    });
-    let toolbar_anchor = Point {
-        x: placement_rect.x,
-        y: placement_rect.y,
+    let Ok(position) = floating_button_position_for_selection(
+        app,
+        Point {
+            x: placement_rect.x,
+            y: placement_rect.y,
+        },
+        &[placement_rect],
+    ) else {
+        record_scroll_measure_failure(session_id);
+        return;
     };
-    let positioned =
-        floating_button_position_for_selection(app, toolbar_anchor, &[placement_rect]).ok()?;
-    let window_position = positioned;
-    show_floating_button_at_position(app.clone(), window_position).ok()?;
-    state.store_latest_floating_button_window_position(window_position);
-    state.store_latest_selection_visual(SelectionVisualState {
-        rect: placement_rect,
-        ..refreshed
-    });
-    Some(window_position)
+    if show_floating_button_at_position(app.clone(), position).is_err() {
+        record_scroll_measure_failure(session_id);
+        return;
+    }
+
+    let state = app.state::<AppState>();
+    state.store_latest_floating_button_window_position(position);
+
+    // 相邻两次测量几乎没有位移 => 应用的滚动动画已经播完。
+    let step_delta_y = measured_rect.y - snapshot.last_measured_y;
+    let measurement_is_stable = settled_measurement_is_stable(settled, step_delta_y);
+
+    // 只在动画停下来之后学习比例，且用「整段位移 ÷ 整段 wheel delta」。
+    // 用动画中途的单帧位移去算会把比例算小一个数量级（实测记事本 0.09
+    // 对真实 0.69），预测因此永远追不上真实滚动步长。
+    if measurement_is_stable && snapshot.ratio_burst_valid {
+        let burst_delta_y = measured_rect.y - snapshot.ratio_anchor_y;
+        if let Some(estimate) = update_scroll_ratio(
+            cached_scroll_ratio(&snapshot.process_name),
+            snapshot.pending_wheel_delta,
+            burst_delta_y,
+        ) {
+            store_scroll_ratio(&snapshot.process_name, estimate);
+            trace_selection_monitor(format_args!(
+                "scroll ratio for {}: {:.3} px/delta after {} samples (burst dy={:.1}, delta={:.1})",
+                snapshot.process_name,
+                estimate.pixels_per_delta,
+                estimate.samples,
+                burst_delta_y,
+                snapshot.pending_wheel_delta
+            ));
+        }
+    }
+
+    if let Ok(mut guard) = scroll_tracker().lock() {
+        if let Some(tracker) = guard.as_mut() {
+            if tracker.session_id == session_id {
+                tracker.tracked_rect = placement_rect;
+                tracker.last_measured_y = measured_rect.y;
+                if measurement_is_stable {
+                    // 这一段滚动结算完毕，重置位移起点。只扣掉本次快照已计入
+                    // 的 delta，测量期间新到的滚轮事件要保留。
+                    // 无论这段是否可信都要重置：不可信的那段更不能留着累加。
+                    tracker.pending_wheel_delta -= snapshot.pending_wheel_delta;
+                    tracker.ratio_anchor_y = measured_rect.y;
+                    tracker.ratio_burst_valid = true;
+                }
+                tracker.failures = 0;
+                // 只有「已经静止 + 这一帧几乎没再动」才算吸附完成。空闲时间到了
+                // 但画面还在动时继续测，否则会把动画中途的位置当成最终位置。
+                tracker.settled_measurement_stable = measurement_is_stable;
+                tracker.hidden = false;
+            }
+        }
+    }
 }
 
-fn refresh_visible_floating_button_from_uia(
+/// 作废当前的比例学习窗口：这一段位移中间有没测到的空档。
+fn invalidate_scroll_ratio_burst(session_id: u64) {
+    if let Ok(mut guard) = scroll_tracker().lock() {
+        if let Some(tracker) = guard.as_mut() {
+            if tracker.session_id == session_id {
+                tracker.ratio_burst_valid = false;
+            }
+        }
+    }
+}
+
+fn record_scroll_measure_failure(session_id: u64) {
+    if let Ok(mut guard) = scroll_tracker().lock() {
+        if let Some(tracker) = guard.as_mut() {
+            if tracker.session_id == session_id {
+                tracker.failures = tracker.failures.saturating_add(1);
+            }
+        }
+    }
+}
+
+/// 测量选区当前真实位置：优先视觉高亮（对 UIA 不可用的应用也有效），
+/// 失败时回退到 UIA。
+fn measure_tracked_selection_rect(
     app: &tauri::AppHandle,
-    predicted_rect: Option<Rect>,
-    _predicted_window_position: Point,
-) -> Option<Point> {
+    snapshot: &ScrollTrackerSnapshot,
+    allow_uia: bool,
+) -> Option<Rect> {
     let state = app.state::<AppState>();
-    let mut context = state.latest_selection()?;
-    let source_window_handle = state.latest_selection_window_handle()?;
-    let uia_result = read_current_uia_selection_from_hwnd(source_window_handle as *mut c_void)?;
-    if uia_result.rects.is_empty() {
+    let excluded_rects = assistant_window_rects(app);
+
+    if let Some(visual) = state.latest_selection_visual() {
+        if let Some(window_rect) = source_window_screen_rect(visual.source_window_handle) {
+            if let Some(search_rect) =
+                tracked_visual_search_rect(window_rect, snapshot.tracked_rect, visual.rect)
+            {
+                if let Some(found) = visual_selection_within(visual, search_rect, &excluded_rects) {
+                    state.store_latest_selection_visual(found);
+                    return Some(scroll_follow_placement_rect(found.rect));
+                }
+            }
+        }
+    }
+
+    if !allow_uia {
         return None;
     }
+
+    let context = state.latest_selection()?;
+    let uia_result =
+        read_current_uia_selection_from_hwnd(snapshot.source_window_handle as *mut c_void)?;
     if let Some(text) = uia_result.text.as_ref() {
         if text.trim() != context.selection.text.trim() {
             return None;
         }
     }
+    uia_result
+        .rects
+        .iter()
+        .copied()
+        .find(is_valid_rect)
+        .map(scroll_follow_placement_rect)
+}
 
-    context.selection.selection_rects = if let Some(predicted_rect) = predicted_rect {
-        let refreshed_rect = uia_result.rects.iter().copied().find(is_valid_rect)?;
-        vec![Rect {
-            x: predicted_rect.x,
-            width: predicted_rect.width,
-            y: refreshed_rect.y,
-            height: refreshed_rect.height,
-        }]
-    } else {
-        uia_result.rects
+/// 结束跟随会话。`abandon` 表示无法确认选区位置，此时隐藏操作条而不是
+/// 把它留在一个猜测出来的位置上。
+fn finish_scroll_tracker(app: &tauri::AppHandle, session_id: u64, abandon: bool) {
+    let mut tracked_rect = None;
+    let mut generation = None;
+    if let Ok(mut guard) = scroll_tracker().lock() {
+        if let Some(tracker) = guard.as_mut() {
+            if tracker.session_id != session_id {
+                return;
+            }
+            tracker.running = false;
+            tracked_rect = Some(tracker.tracked_rect);
+            generation = Some(tracker.generation);
+        }
+    }
+
+    let state = app.state::<AppState>();
+    if generation.is_some_and(|generation| generation != state.scroll_follow_generation()) {
+        return;
+    }
+
+    if abandon {
+        let _ = hide_floating_button(app.clone());
+        return;
+    }
+
+    // 静止后把最终位置同步回选区上下文，供面板等后续逻辑使用。
+    let Some(tracked_rect) = tracked_rect else {
+        return;
     };
+    let Some(mut context) = state.latest_selection() else {
+        return;
+    };
+    context.selection.selection_rects = vec![tracked_rect];
     context.selection.explicit_anchor = None;
     let anchor_point = context.selection.anchor_point();
     context.selection.explicit_anchor = Some(anchor_point);
     context.selection.fallback_point = anchor_point;
-    let toolbar_anchor = context.selection.toolbar_anchor_point();
     state.store_latest_selection(context.clone());
-    state.clear_latest_selection_visual();
     emit_context_if_panel_visible(app, &context);
-    let positioned = floating_button_position_for_selection(
-        app,
-        toolbar_anchor,
-        &context.selection.selection_rects,
-    )
-    .ok()?;
-    let window_position = positioned;
-    show_floating_button_at_position(app.clone(), window_position).ok()?;
-    state.store_latest_floating_button_window_position(window_position);
-    Some(window_position)
 }
 
 fn emit_context_if_panel_visible(
