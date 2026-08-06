@@ -802,14 +802,24 @@ fn source_window_screen_rect(source_window_handle: isize) -> Option<Rect> {
     })
 }
 
+/// 拖拽选字时的搜索区：纵向覆盖拖拽行上下，横向以拖拽范围为中心适度外扩。
+///
+/// 横向**不能**直接用整个窗口宽度：8K 屏或跨显示器的窗口宽度可能超过
+/// `MAX_CAPTURE_WIDTH`，那样每次捕获都会被上限直接拒掉，视觉检测彻底失效——
+/// 而自动划词路径恰恰在 UIA 拿不到选区时才依赖它，且不允许剪贴板兜底。
 fn drag_visual_search_rect(window_rect: Rect, down_point: Point, up_point: Point) -> Option<Rect> {
+    const DRAG_SEARCH_PADDING_X: f64 = 320.0;
+
     let top = down_point.y.min(up_point.y) - 140.0;
     let bottom = down_point.y.max(up_point.y) + 220.0;
+    let left = down_point.x.min(up_point.x) - DRAG_SEARCH_PADDING_X;
+    let right = down_point.x.max(up_point.x) + DRAG_SEARCH_PADDING_X;
+
     intersect_rects(
         Rect {
-            x: window_rect.x,
+            x: left,
             y: top,
-            width: window_rect.width,
+            width: (right - left).max(1.0),
             height: (bottom - top).max(1.0),
         },
         window_rect,
@@ -1211,6 +1221,12 @@ struct ScrollTracker {
     tracked_rect: Rect,
     /// `tracked_rect` 是否来自真实测量。预测值不能当作下一轮的位移基线。
     tracked_rect_measured: bool,
+    /// 滚轮事件序号，每来一个事件自增。
+    ///
+    /// 测量在锁外进行，期间可能又来了新的滚轮事件（甚至把节奏推成快速滚动
+    /// 并隐藏了操作条）。此时这次测量算出来的位置已经过期，序号对不上就丢弃，
+    /// 否则会把操作条重新显示在旧位置上，并把 `hidden` 复位成 false。
+    wheel_seq: u64,
     /// 上一次真实测量得到的 y，用于判断动画是否已经停下来。
     last_measured_y: f64,
     /// 上一次「动画已停」时的 y，作为学习滚动比例的位移起点。
@@ -1238,6 +1254,7 @@ struct ScrollTracker {
 
 #[derive(Debug, Clone)]
 struct ScrollTrackerSnapshot {
+    session_id: u64,
     generation: u64,
     started_at: Instant,
     last_wheel_at: Instant,
@@ -1247,6 +1264,7 @@ struct ScrollTrackerSnapshot {
     last_measured_y: f64,
     ratio_anchor_y: f64,
     ratio_burst_valid: bool,
+    wheel_seq: u64,
     failures: u32,
     settled_measurement_stable: bool,
     process_name: String,
@@ -1290,6 +1308,7 @@ fn scroll_tracker_snapshot(session_id: u64) -> Option<ScrollTrackerSnapshot> {
     }
 
     Some(ScrollTrackerSnapshot {
+        session_id: tracker.session_id,
         generation: tracker.generation,
         started_at: tracker.started_at,
         last_wheel_at: tracker.last_wheel_at,
@@ -1299,6 +1318,7 @@ fn scroll_tracker_snapshot(session_id: u64) -> Option<ScrollTrackerSnapshot> {
         last_measured_y: tracker.last_measured_y,
         ratio_anchor_y: tracker.ratio_anchor_y,
         ratio_burst_valid: tracker.ratio_burst_valid,
+        wheel_seq: tracker.wheel_seq,
         failures: tracker.failures,
         settled_measurement_stable: tracker.settled_measurement_stable,
         process_name: tracker.process_name.clone(),
@@ -1458,6 +1478,7 @@ fn follow_visible_floating_button_after_scroll(
                 // 快速滚动一开始就不测量；基线若不是测量得来的，同样不能
                 // 拿这段位移去学比例——等第一次稳定测量重新锚定后再说。
                 ratio_burst_valid: pace != ScrollPace::Fast && baseline_measured,
+                wheel_seq: 1,
                 failures: 0,
                 settled_measurement_stable: false,
                 hidden: pace == ScrollPace::Fast,
@@ -1472,6 +1493,7 @@ fn follow_visible_floating_button_after_scroll(
             tracker.pending_wheel_delta += wheel_delta;
             tracker.tracked_rect = predicted_rect;
             tracker.tracked_rect_measured = false;
+            tracker.wheel_seq = tracker.wheel_seq.saturating_add(1);
             tracker.settled_measurement_stable = false;
             // 只在进入快速滚动的那一刻隐藏一次，避免每个滚轮事件都调用 hide。
             hide_now = pace == ScrollPace::Fast && !tracker.hidden;
@@ -1568,15 +1590,16 @@ fn measure_and_follow_selection(
     allow_uia: bool,
     settled: bool,
 ) {
-    let measured_rect = match measure_tracked_selection_rect(app, snapshot, allow_uia) {
-        MeasureOutcome::Measured(rect) => rect,
-        MeasureOutcome::Failed => {
-            record_scroll_measure_failure(session_id);
-            return;
-        }
-        // 这一帧被节流跳过，什么都没发生，不能算跟丢。
-        MeasureOutcome::Skipped => return,
-    };
+    let (measured_rect, measured_visual) =
+        match measure_tracked_selection_rect(app, snapshot, allow_uia) {
+            MeasureOutcome::Measured { rect, visual } => (rect, visual),
+            MeasureOutcome::Failed => {
+                record_scroll_measure_failure(session_id);
+                return;
+            }
+            // 这一帧被节流跳过，什么都没发生，不能算跟丢。
+            MeasureOutcome::Skipped => return,
+        };
 
     // 只跟随纵向位移：横向沿用原选区的 x/width，避免检测抖动让操作条左右乱跳。
     let placement_rect = Rect {
@@ -1609,10 +1632,16 @@ fn measure_and_follow_selection(
     };
 
     // 像素扫描和 UIA 调用都在锁外进行，期间世界可能已经变了：选区被清除
-    // （generation 自增）、会话被换掉，或者新的快速滚动刚把操作条隐藏。
+    // （generation 自增）、会话被换掉，或者又来了新的滚轮事件把操作条隐藏。
     // 此时这次测量结果已经过期，再 show 出去会让操作条凭空复现。
-    if !scroll_session_still_current(session_id, snapshot.generation, app) {
+    if !scroll_measurement_still_current(snapshot, app) {
         return;
+    }
+
+    // 确认快照仍然有效后，才把像素扫描到的视觉状态写回全局。
+    if let Some(visual) = measured_visual {
+        app.state::<AppState>()
+            .store_latest_selection_visual(visual);
     }
 
     if show_floating_button_at_position(app.clone(), position).is_err() {
@@ -1684,20 +1713,28 @@ fn invalidate_scroll_ratio_burst(session_id: u64) {
     }
 }
 
-/// 这次测量的结果是否还值得用：会话没被换掉、仍在运行，且选区身份未变。
+/// 这次测量的结果是否还值得用。
 ///
-/// 测量本身在锁外进行，返回时状态可能已经作废，落地前必须重新确认。
-fn scroll_session_still_current(session_id: u64, generation: u64, app: &tauri::AppHandle) -> bool {
-    if app.state::<AppState>().scroll_follow_generation() != generation {
+/// 三个条件缺一不可：选区身份未变（generation）、会话没被换掉且仍在运行、
+/// **测量期间没有新的滚轮事件**（wheel_seq）。最后一条是关键：同一个会话内
+/// 若滚轮把节奏推成快速滚动并隐藏了操作条，仅比对 session_id 和 running
+/// 查不出来，过期结果会把操作条重新显示出来并把 hidden 复位成 false。
+fn scroll_measurement_still_current(
+    snapshot: &ScrollTrackerSnapshot,
+    app: &tauri::AppHandle,
+) -> bool {
+    if app.state::<AppState>().scroll_follow_generation() != snapshot.generation {
         return false;
     }
     scroll_tracker()
         .lock()
         .ok()
         .and_then(|guard| {
-            guard
-                .as_ref()
-                .map(|tracker| tracker.session_id == session_id && tracker.running)
+            guard.as_ref().map(|tracker| {
+                tracker.session_id == snapshot.session_id
+                    && tracker.running
+                    && tracker.wheel_seq == snapshot.wheel_seq
+            })
         })
         .unwrap_or(false)
 }
@@ -1718,7 +1755,12 @@ fn record_scroll_measure_failure(session_id: u64) {
 /// 被节流跳过的帧如果也计入失败次数，纯 UIA 选区（没有视觉高亮可用）
 /// 会在几帧之内耗尽失败额度，操作条被误判为跟丢而隐藏。
 enum MeasureOutcome {
-    Measured(Rect),
+    /// 测到了位置；`visual` 非空时表示这次是像素扫描的结果，
+    /// 需要在确认快照仍然有效之后再写回全局状态。
+    Measured {
+        rect: Rect,
+        visual: Option<SelectionVisualState>,
+    },
     Failed,
     Skipped,
 }
@@ -1739,8 +1781,12 @@ fn measure_tracked_selection_rect(
                 tracked_visual_search_rect(window_rect, snapshot.tracked_rect, visual.rect)
             {
                 if let Some(found) = visual_selection_within(visual, search_rect, &excluded_rects) {
-                    state.store_latest_selection_visual(found);
-                    return MeasureOutcome::Measured(scroll_follow_placement_rect(found.rect));
+                    // 不在这里写回：扫描期间选区可能已经被替换，
+                    // 立刻落盘会用旧选区的视觉状态覆盖掉新选区的。
+                    return MeasureOutcome::Measured {
+                        rect: scroll_follow_placement_rect(found.rect),
+                        visual: Some(found),
+                    };
                 }
             }
         }
@@ -1770,7 +1816,10 @@ fn measure_tracked_selection_rect(
         .copied()
         .find(is_valid_rect)
         .map(scroll_follow_placement_rect)
-        .map_or(MeasureOutcome::Failed, MeasureOutcome::Measured)
+        .map_or(MeasureOutcome::Failed, |rect| MeasureOutcome::Measured {
+            rect,
+            visual: None,
+        })
 }
 
 /// 结束跟随会话。`abandon` 表示无法确认选区位置，此时隐藏操作条而不是
@@ -1806,7 +1855,27 @@ fn finish_scroll_tracker(app: &tauri::AppHandle, session_id: u64, abandon: bool)
     let Some(mut context) = state.latest_selection() else {
         return;
     };
-    context.selection.selection_rects = vec![tracked_rect];
+    // 整体平移原有的全部选区矩形，而不是用这一个替换掉它们。
+    //
+    // tracked_rect 只是「首行的放置矩形」，高度还被 scroll_follow_placement_rect
+    // 压到了 36px。多行选区如果被它替换，后续翻译结果窗口之类的定位就只能看到
+    // 顶部一条带，侧边放不下时会盖住没被表示出来的下方行。
+    let scrolled_delta_y = context
+        .selection
+        .selection_rects
+        .iter()
+        .copied()
+        .find(is_valid_rect)
+        .map(|first| tracked_rect.y - first.y);
+    match scrolled_delta_y {
+        Some(delta_y) => {
+            for rect in context.selection.selection_rects.iter_mut() {
+                rect.y += delta_y;
+            }
+        }
+        // 原本就没有可用的几何信息，只能退回到单个矩形。
+        None => context.selection.selection_rects = vec![tracked_rect],
+    }
     context.selection.explicit_anchor = None;
     let anchor_point = context.selection.anchor_point();
     context.selection.explicit_anchor = Some(anchor_point);
