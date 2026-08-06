@@ -37,10 +37,11 @@ use windows_sys::Win32::{
             KEYEVENTF_KEYUP, VK_CONTROL, VK_MENU,
         },
         WindowsAndMessaging::{
-            CallNextHookEx, DispatchMessageW, GetCursorPos, GetForegroundWindow, GetMessageW,
-            GetWindowRect, GetWindowTextW, GetWindowThreadProcessId, SetWindowsHookExW,
-            TranslateMessage, UnhookWindowsHookEx, MSG, MSLLHOOKSTRUCT, WH_MOUSE_LL,
-            WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL,
+            CallNextHookEx, DispatchMessageW, GetAncestor, GetCursorPos, GetForegroundWindow,
+            GetMessageW, GetWindowRect, GetWindowTextW, GetWindowThreadProcessId,
+            SetWindowsHookExW, SystemParametersInfoW, TranslateMessage, UnhookWindowsHookEx,
+            WindowFromPoint, GA_ROOT, MSG, MSLLHOOKSTRUCT, WH_MOUSE_LL, WM_LBUTTONDOWN,
+            WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL,
         },
     },
 };
@@ -627,6 +628,11 @@ impl PixelBuffer {
             )
         };
 
+        // GetDIBits 要求目标位图**不能**处于选中状态（MSDN 明确规定），
+        // 严格的显卡驱动会直接返回 0，导致整个视觉检测静默失效。
+        // 所以在读取像素之前先把原位图选回去。
+        unsafe { SelectObject(memory_dc, previous) };
+
         let mut bgra = vec![0_u8; (width as usize) * (height as usize) * 4];
         let scanlines = if copied == 0 {
             0
@@ -666,7 +672,6 @@ impl PixelBuffer {
         };
 
         unsafe {
-            SelectObject(memory_dc, previous);
             DeleteObject(bitmap);
             DeleteDC(memory_dc);
             ReleaseDC(null_mut(), screen_dc);
@@ -1204,6 +1209,8 @@ struct ScrollTracker {
     pending_wheel_delta: f64,
     /// 当前认为选区所在的矩形（预测或测量得到）。
     tracked_rect: Rect,
+    /// `tracked_rect` 是否来自真实测量。预测值不能当作下一轮的位移基线。
+    tracked_rect_measured: bool,
     /// 上一次真实测量得到的 y，用于判断动画是否已经停下来。
     last_measured_y: f64,
     /// 上一次「动画已停」时的 y，作为学习滚动比例的位移起点。
@@ -1299,20 +1306,56 @@ fn scroll_tracker_snapshot(session_id: u64) -> Option<ScrollTrackerSnapshot> {
     })
 }
 
-/// 这次滚轮事件是不是真的作用在选区所在的窗口上。
+/// 系统把滚轮事件送给哪个窗口，取决于「滚动非活动窗口」这项设置。
 ///
-/// Windows 10 起默认「滚动鼠标指针下方的窗口」，所以光标在来源窗口内即可；
-/// 若用户关掉了该设置，滚轮会送给前台窗口，因此来源窗口是前台时也放行。
-/// 两者都不满足，说明用户在滚别的东西，本次跟随必须忽略。
+/// 不能简单地「光标在来源窗口内 **或** 来源窗口是前台」就放行——两个方向
+/// 都会误判：设置开启时来源窗口可能是前台、但光标在别的应用上（滚的是别人）；
+/// 设置关闭时光标可能停在非活动的来源窗口上（滚的其实是前台窗口）。
+/// 必须按当前路由方式判断真正的接收者。
+fn wheel_routes_to_focused_window() -> bool {
+    const SPI_GETMOUSEWHEELROUTING: u32 = 0x201C;
+    const MOUSEWHEEL_ROUTING_FOCUS: u32 = 0;
+
+    let mut routing: u32 = u32::MAX;
+    let ok = unsafe {
+        SystemParametersInfoW(
+            SPI_GETMOUSEWHEELROUTING,
+            0,
+            &mut routing as *mut u32 as *mut c_void,
+            0,
+        )
+    };
+    // 读不到就按 Windows 10+ 的默认行为（送给指针下的窗口）处理。
+    ok != 0 && routing == MOUSEWHEEL_ROUTING_FOCUS
+}
+
+/// 光标位置所属的顶层窗口。
+fn root_window_at_point(point: Point) -> isize {
+    let hwnd = unsafe {
+        WindowFromPoint(POINT {
+            x: point.x.round() as i32,
+            y: point.y.round() as i32,
+        })
+    };
+    if hwnd.is_null() {
+        return 0;
+    }
+    let root = unsafe { GetAncestor(hwnd, GA_ROOT) };
+    if root.is_null() {
+        hwnd as isize
+    } else {
+        root as isize
+    }
+}
+
+/// 这次滚轮事件是不是真的作用在选区所在的窗口上。
 fn wheel_targets_source_window(source_window_handle: isize, wheel_position: Point) -> bool {
-    if source_window_screen_rect(source_window_handle)
-        .is_some_and(|rect| crate::input_monitor::events::rect_contains(rect, wheel_position))
-    {
-        return true;
+    if wheel_routes_to_focused_window() {
+        let foreground = unsafe { GetForegroundWindow() };
+        return !foreground.is_null() && foreground as isize == source_window_handle;
     }
 
-    let foreground = unsafe { GetForegroundWindow() };
-    !foreground.is_null() && foreground as isize == source_window_handle
+    root_window_at_point(wheel_position) == source_window_handle
 }
 
 fn follow_visible_floating_button_after_scroll(
@@ -1356,16 +1399,26 @@ fn follow_visible_floating_button_after_scroll(
 
     // 起始矩形优先取跟随会话里最近一次的测量结果，其次才是事件循环里
     // 记录的预测值，避免上一轮滚动的预测误差被当成新的起点。
-    let tracked_rect = scroll_tracker().lock().ok().and_then(|guard| {
-        guard
-            .as_ref()
-            .and_then(|tracker| (tracker.generation == generation).then_some(tracker.tracked_rect))
+    //
+    // 只有真正测量过的矩形才配当基线：上一轮若是因连续测量失败而放弃，
+    // 留下的 tracked_rect 是没验证过的预测值，拿它当位移起点会把上一轮的
+    // 误差算进这一轮的 wheel delta，污染整个进程的比例缓存。
+    let measured_tracked_rect = scroll_tracker().lock().ok().and_then(|guard| {
+        guard.as_ref().and_then(|tracker| {
+            (tracker.generation == generation && tracker.tracked_rect_measured)
+                .then_some(tracker.tracked_rect)
+        })
     });
-    let Some(current_rect) = tracked_rect.or(visible.selection_rect).or_else(|| {
-        state
-            .latest_selection_visual()
-            .map(|visual| scroll_follow_placement_rect(visual.rect))
-    }) else {
+    // 基线是否具备测量精度，决定这一段位移能否用于学习比例。
+    let baseline_measured = measured_tracked_rect.is_some();
+    let Some(current_rect) = measured_tracked_rect
+        .or_else(|| {
+            state
+                .latest_selection_visual()
+                .map(|visual| scroll_follow_placement_rect(visual.rect))
+        })
+        .or(visible.selection_rect)
+    else {
         return;
     };
 
@@ -1399,10 +1452,12 @@ fn follow_visible_floating_button_after_scroll(
                 pace,
                 pending_wheel_delta: wheel_delta,
                 tracked_rect: predicted_rect,
+                tracked_rect_measured: false,
                 last_measured_y: current_rect.y,
                 ratio_anchor_y: current_rect.y,
-                // 快速滚动一开始就不测量，这段位移不能用来学比例。
-                ratio_burst_valid: pace != ScrollPace::Fast,
+                // 快速滚动一开始就不测量；基线若不是测量得来的，同样不能
+                // 拿这段位移去学比例——等第一次稳定测量重新锚定后再说。
+                ratio_burst_valid: pace != ScrollPace::Fast && baseline_measured,
                 failures: 0,
                 settled_measurement_stable: false,
                 hidden: pace == ScrollPace::Fast,
@@ -1416,6 +1471,7 @@ fn follow_visible_floating_button_after_scroll(
             tracker.pace = pace;
             tracker.pending_wheel_delta += wheel_delta;
             tracker.tracked_rect = predicted_rect;
+            tracker.tracked_rect_measured = false;
             tracker.settled_measurement_stable = false;
             // 只在进入快速滚动的那一刻隐藏一次，避免每个滚轮事件都调用 hide。
             hide_now = pace == ScrollPace::Fast && !tracker.hidden;
@@ -1512,9 +1568,14 @@ fn measure_and_follow_selection(
     allow_uia: bool,
     settled: bool,
 ) {
-    let Some(measured_rect) = measure_tracked_selection_rect(app, snapshot, allow_uia) else {
-        record_scroll_measure_failure(session_id);
-        return;
+    let measured_rect = match measure_tracked_selection_rect(app, snapshot, allow_uia) {
+        MeasureOutcome::Measured(rect) => rect,
+        MeasureOutcome::Failed => {
+            record_scroll_measure_failure(session_id);
+            return;
+        }
+        // 这一帧被节流跳过，什么都没发生，不能算跟丢。
+        MeasureOutcome::Skipped => return,
     };
 
     // 只跟随纵向位移：横向沿用原选区的 x/width，避免检测抖动让操作条左右乱跳。
@@ -1546,6 +1607,14 @@ fn measure_and_follow_selection(
         record_scroll_measure_failure(session_id);
         return;
     };
+
+    // 像素扫描和 UIA 调用都在锁外进行，期间世界可能已经变了：选区被清除
+    // （generation 自增）、会话被换掉，或者新的快速滚动刚把操作条隐藏。
+    // 此时这次测量结果已经过期，再 show 出去会让操作条凭空复现。
+    if !scroll_session_still_current(session_id, snapshot.generation, app) {
+        return;
+    }
+
     if show_floating_button_at_position(app.clone(), position).is_err() {
         record_scroll_measure_failure(session_id);
         return;
@@ -1584,6 +1653,7 @@ fn measure_and_follow_selection(
         if let Some(tracker) = guard.as_mut() {
             if tracker.session_id == session_id {
                 tracker.tracked_rect = placement_rect;
+                tracker.tracked_rect_measured = true;
                 tracker.last_measured_y = measured_rect.y;
                 if measurement_is_stable {
                     // 这一段滚动结算完毕，重置位移起点。只扣掉本次快照已计入
@@ -1614,6 +1684,24 @@ fn invalidate_scroll_ratio_burst(session_id: u64) {
     }
 }
 
+/// 这次测量的结果是否还值得用：会话没被换掉、仍在运行，且选区身份未变。
+///
+/// 测量本身在锁外进行，返回时状态可能已经作废，落地前必须重新确认。
+fn scroll_session_still_current(session_id: u64, generation: u64, app: &tauri::AppHandle) -> bool {
+    if app.state::<AppState>().scroll_follow_generation() != generation {
+        return false;
+    }
+    scroll_tracker()
+        .lock()
+        .ok()
+        .and_then(|guard| {
+            guard
+                .as_ref()
+                .map(|tracker| tracker.session_id == session_id && tracker.running)
+        })
+        .unwrap_or(false)
+}
+
 fn record_scroll_measure_failure(session_id: u64) {
     if let Ok(mut guard) = scroll_tracker().lock() {
         if let Some(tracker) = guard.as_mut() {
@@ -1624,13 +1712,24 @@ fn record_scroll_measure_failure(session_id: u64) {
     }
 }
 
+/// 一次测量的结果。
+///
+/// 必须区分「测了但没测到」和「这一帧根本没测」：UIA 有采样节流，
+/// 被节流跳过的帧如果也计入失败次数，纯 UIA 选区（没有视觉高亮可用）
+/// 会在几帧之内耗尽失败额度，操作条被误判为跟丢而隐藏。
+enum MeasureOutcome {
+    Measured(Rect),
+    Failed,
+    Skipped,
+}
+
 /// 测量选区当前真实位置：优先视觉高亮（对 UIA 不可用的应用也有效），
 /// 失败时回退到 UIA。
 fn measure_tracked_selection_rect(
     app: &tauri::AppHandle,
     snapshot: &ScrollTrackerSnapshot,
     allow_uia: bool,
-) -> Option<Rect> {
+) -> MeasureOutcome {
     let state = app.state::<AppState>();
     let excluded_rects = assistant_window_rects(app);
 
@@ -1641,22 +1740,28 @@ fn measure_tracked_selection_rect(
             {
                 if let Some(found) = visual_selection_within(visual, search_rect, &excluded_rects) {
                     state.store_latest_selection_visual(found);
-                    return Some(scroll_follow_placement_rect(found.rect));
+                    return MeasureOutcome::Measured(scroll_follow_placement_rect(found.rect));
                 }
             }
         }
     }
 
+    // 这一帧不允许走 UIA：属于「没测」，不是「测失败」。
     if !allow_uia {
-        return None;
+        return MeasureOutcome::Skipped;
     }
 
-    let context = state.latest_selection()?;
-    let uia_result =
-        read_current_uia_selection_from_hwnd(snapshot.source_window_handle as *mut c_void)?;
+    let Some(context) = state.latest_selection() else {
+        return MeasureOutcome::Failed;
+    };
+    let Some(uia_result) =
+        read_current_uia_selection_from_hwnd(snapshot.source_window_handle as *mut c_void)
+    else {
+        return MeasureOutcome::Failed;
+    };
     if let Some(text) = uia_result.text.as_ref() {
         if text.trim() != context.selection.text.trim() {
-            return None;
+            return MeasureOutcome::Failed;
         }
     }
     uia_result
@@ -1665,6 +1770,7 @@ fn measure_tracked_selection_rect(
         .copied()
         .find(is_valid_rect)
         .map(scroll_follow_placement_rect)
+        .map_or(MeasureOutcome::Failed, MeasureOutcome::Measured)
 }
 
 /// 结束跟随会话。`abandon` 表示无法确认选区位置，此时隐藏操作条而不是
