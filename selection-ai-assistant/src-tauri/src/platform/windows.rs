@@ -34,7 +34,7 @@ use windows_sys::Win32::{
     UI::{
         Input::KeyboardAndMouse::{
             GetAsyncKeyState, SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT,
-            KEYEVENTF_KEYUP, VK_CONTROL, VK_MENU,
+            KEYEVENTF_KEYUP, VK_CONTROL, VK_MENU, VK_SHIFT,
         },
         WindowsAndMessaging::{
             CallNextHookEx, DispatchMessageW, GetAncestor, GetCursorPos, GetForegroundWindow,
@@ -1270,7 +1270,6 @@ struct ScrollTracker {
 
 #[derive(Debug, Clone)]
 struct ScrollTrackerSnapshot {
-    session_id: u64,
     generation: u64,
     started_at: Instant,
     last_wheel_at: Instant,
@@ -1326,7 +1325,6 @@ fn scroll_tracker_snapshot(session_id: u64) -> Option<ScrollTrackerSnapshot> {
     }
 
     Some(ScrollTrackerSnapshot {
-        session_id: tracker.session_id,
         generation: tracker.generation,
         started_at: tracker.started_at,
         last_wheel_at: tracker.last_wheel_at,
@@ -1384,6 +1382,13 @@ fn wheel_routes_to_focused_window() -> bool {
     }
 }
 
+/// 本次滚轮是否带着「这不是纵向滚动」的修饰键。
+///
+/// Ctrl+滚轮几乎都是缩放，Shift+滚轮几乎都是横向滚动。
+fn wheel_has_non_vertical_modifier() -> bool {
+    key_down(VK_CONTROL as i32) || key_down(VK_SHIFT as i32)
+}
+
 /// 光标位置所属的顶层窗口。
 fn root_window_at_point(point: Point) -> isize {
     let hwnd = unsafe {
@@ -1436,6 +1441,16 @@ fn follow_visible_floating_button_after_scroll(
     let Some(source_window_handle) = state.latest_selection_window_handle() else {
         return;
     };
+    // Ctrl+滚轮通常是缩放、Shift+滚轮通常是横向滚动，都不是纵向滚动。
+    // 按纵向处理会预测出一个凭空的位移；缩放还会同时改变选区的宽高，
+    // 而跟随只平移 y、沿用旧的 x/width，结果必然是错的。这类手势直接不跟。
+    if wheel_has_non_vertical_modifier() {
+        trace_selection_monitor(format_args!(
+            "scroll ignored: modifier wheel (zoom / horizontal), not vertical scrolling"
+        ));
+        return;
+    }
+
     // 低层鼠标钩子是全局的：在别的窗口上滚动同样会走到这里。不加判断的话，
     // 滚动任意一个无关窗口都会驱动跟随——操作条被预测位移带偏、快滚还会
     // 把它整个隐藏掉，而来源窗口其实一动没动。
@@ -1463,21 +1478,26 @@ fn follow_visible_floating_button_after_scroll(
     // tracked_rect 是本轮突发滚动累积下来的预测值，必须沿用：否则每个事件都
     // 从上一次测量重新起算，预测只前进一格。视觉跟踪的搜索带只有 ±160px，
     // 连续多格快滚会直接把选区甩出搜索带，每次扫描都落空、最终误判为跟丢。
+    // 注意：`abandoned` 必须**独立于**几何资格判断读取。
+    // 六次测量全失败而放弃时，running 和 tracked_rect_measured 同时为 false，
+    // 若把它塞进几何资格的 then_some 里，恰好就是这个标记要保护的场景被过滤掉，
+    // 幽灵操作条照样会冒出来。
     let (reusable_tracked_rect, baseline_measured, recovering_from_abandon) = scroll_tracker()
         .lock()
         .ok()
         .and_then(|guard| {
-            guard.as_ref().and_then(|tracker| {
+            guard.as_ref().map(|tracker| {
                 if tracker.generation != generation {
-                    return None;
+                    return (None, false, false);
                 }
                 let abandoned = !tracker.running && tracker.abandoned;
                 // 会话仍在运行 => 沿用累积预测；已停止 => 只认测量过的几何。
-                (tracker.running || tracker.tracked_rect_measured).then_some((
-                    Some(tracker.tracked_rect),
+                let usable = tracker.running || tracker.tracked_rect_measured;
+                (
+                    usable.then_some(tracker.tracked_rect),
                     tracker.tracked_rect_measured,
                     abandoned,
-                ))
+                )
             })
         })
         .unwrap_or((None, false, false));
@@ -1696,7 +1716,14 @@ fn measure_and_follow_selection(
     // 空闲时间一到就把它显示在中途位置上，它会跟着剩余动画一路追，
     // 正是本次要消灭的观感；此时继续测量即可，不显示。
     if snapshot.hidden && !measurement_is_stable {
-        commit_scroll_measurement(session_id, snapshot, measured_rect, placement_rect, false);
+        commit_scroll_measurement(
+            session_id,
+            snapshot,
+            measured_rect,
+            placement_rect,
+            false,
+            false,
+        );
         return;
     }
 
@@ -1712,14 +1739,27 @@ fn measure_and_follow_selection(
         return;
     };
 
-    // 像素扫描和 UIA 调用都在锁外进行，期间世界可能已经变了：选区被清除
-    // （generation 自增）、会话被换掉，或者又来了新的滚轮事件把操作条隐藏。
-    // 此时这次测量结果已经过期，再 show 出去会让操作条凭空复现。
-    if !scroll_measurement_still_current(snapshot, app) {
+    // 先在锁内提交（受 generation + wheel_seq 保护），提交成功才产生副作用。
+    //
+    // 顺序很关键：如果先 show 再提交，一个在 show 期间到达的滚轮事件会把
+    // tracker 标成 hidden 并隐藏操作条，而我们随后又把它显示出来；提交虽然
+    // 会因序号不符被拒，但 tracker 里 hidden 已经是 true，后续 WaitHidden
+    // 不会再隐藏它——操作条就在整段快滚里一直停在过期位置上。
+    if app.state::<AppState>().scroll_follow_generation() != snapshot.generation {
+        return;
+    }
+    if !commit_scroll_measurement(
+        session_id,
+        snapshot,
+        measured_rect,
+        placement_rect,
+        measurement_is_stable,
+        true,
+    ) {
         return;
     }
 
-    // 确认快照仍然有效后，才把像素扫描到的视觉状态写回全局。
+    // 提交成功后才把像素扫描到的视觉状态写回全局。
     if let Some(visual) = measured_visual {
         app.state::<AppState>()
             .store_latest_selection_visual(visual);
@@ -1732,6 +1772,22 @@ fn measure_and_follow_selection(
 
     app.state::<AppState>()
         .store_latest_floating_button_window_position(position);
+
+    // show 期间仍可能来新的滚轮事件并要求隐藏。上面的提交已经过时，
+    // 这里补一次核对：若 tracker 现在要求隐藏，就把刚显示出来的收回去。
+    let superseded_and_hidden = scroll_tracker()
+        .lock()
+        .ok()
+        .and_then(|guard| {
+            guard
+                .as_ref()
+                .map(|tracker| tracker.session_id == session_id && tracker.hidden)
+        })
+        .unwrap_or(false);
+    if superseded_and_hidden {
+        let _ = hide_floating_button(app.clone());
+        return;
+    }
 
     // 只在动画停下来之后学习比例，且用「整段位移 ÷ 整段 wheel delta」。
     // 用动画中途的单帧位移去算会把比例算小一个数量级（实测记事本 0.09
@@ -1754,19 +1810,16 @@ fn measure_and_follow_selection(
             ));
         }
     }
-
-    commit_scroll_measurement(
-        session_id,
-        snapshot,
-        measured_rect,
-        placement_rect,
-        measurement_is_stable,
-    );
 }
 
-/// 把一次测量结果写回 tracker。
+/// 把一次测量结果写回 tracker，返回是否真的写入。
 ///
-/// `shown` 为 false 表示这次只更新几何、没有显示操作条（快速滚动尚未停稳），
+/// 在锁内校验 `wheel_seq`：测量是在锁外做的，期间新到的滚轮事件会装入更新的
+/// 预测值。只比对 `session_id` 的话，过期测量会把它覆盖掉，还顺手清空
+/// failures/hidden 并置上 settled_measurement_stable，让下一轮在仍有新滚动时
+/// 就收尾。返回 false 表示这次结果已过期，调用方不应再产生任何副作用。
+///
+/// `will_show` 为 false 表示调用方这次不会显示操作条（快速滚动尚未停稳），
 /// 此时不能把 `hidden` 复位，否则后续的 WaitHidden 不会再隐藏它。
 fn commit_scroll_measurement(
     session_id: u64,
@@ -1774,19 +1827,16 @@ fn commit_scroll_measurement(
     measured_rect: Rect,
     placement_rect: Rect,
     measurement_is_stable: bool,
-) {
+    will_show: bool,
+) -> bool {
     let Ok(mut guard) = scroll_tracker().lock() else {
-        return;
+        return false;
     };
     let Some(tracker) = guard.as_mut() else {
-        return;
+        return false;
     };
-    // 必须再校验一次 wheel_seq：先前那次校验已经放开了锁，期间新到的滚轮
-    // 事件会装入更新的预测值。只比对 session_id 的话，过期测量会把它覆盖掉，
-    // 还顺手清空 failures/hidden 并置上 settled_measurement_stable，
-    // 让下一轮在仍有新滚动时就收尾。
     if tracker.session_id != session_id || tracker.wheel_seq != snapshot.wheel_seq {
-        return;
+        return false;
     }
 
     tracker.tracked_rect = placement_rect;
@@ -1804,9 +1854,11 @@ fn commit_scroll_measurement(
     // 只有「已经静止 + 这一帧几乎没再动」才算吸附完成。空闲时间到了但画面
     // 还在动时继续测，否则会把动画中途的位置当成最终位置。
     tracker.settled_measurement_stable = measurement_is_stable;
-    if measurement_is_stable || !tracker.hidden {
+    // 只有确实要把操作条显示出来时才清除隐藏标记。
+    if will_show {
         tracker.hidden = false;
     }
+    true
 }
 
 /// 作废当前的比例学习窗口：这一段位移中间有没测到的空档。
@@ -1818,32 +1870,6 @@ fn invalidate_scroll_ratio_burst(session_id: u64) {
             }
         }
     }
-}
-
-/// 这次测量的结果是否还值得用。
-///
-/// 三个条件缺一不可：选区身份未变（generation）、会话没被换掉且仍在运行、
-/// **测量期间没有新的滚轮事件**（wheel_seq）。最后一条是关键：同一个会话内
-/// 若滚轮把节奏推成快速滚动并隐藏了操作条，仅比对 session_id 和 running
-/// 查不出来，过期结果会把操作条重新显示出来并把 hidden 复位成 false。
-fn scroll_measurement_still_current(
-    snapshot: &ScrollTrackerSnapshot,
-    app: &tauri::AppHandle,
-) -> bool {
-    if app.state::<AppState>().scroll_follow_generation() != snapshot.generation {
-        return false;
-    }
-    scroll_tracker()
-        .lock()
-        .ok()
-        .and_then(|guard| {
-            guard.as_ref().map(|tracker| {
-                tracker.session_id == snapshot.session_id
-                    && tracker.running
-                    && tracker.wheel_seq == snapshot.wheel_seq
-            })
-        })
-        .unwrap_or(false)
 }
 
 fn record_scroll_measure_failure(session_id: u64) {
