@@ -65,12 +65,12 @@ use crate::{
         consume_pending_selection, handle_hotkey_state,
         hover_action_for_pending_selection_when_idle, manual_hotkey_trigger_key,
         predicted_scroll_offset, scroll_tracker_action, selection_geometry_matches_drag_gesture,
-        selection_still_trackable, settled_measurement_is_stable, should_follow_scroll_for_source,
-        update_scroll_ratio, visible_floating_button_action_when_idle, HotkeyAction,
-        HotkeyKeyState, MouseButtonEvent, PendingHotkeyAction, PendingSelection,
-        PendingSelectionHoverAction, ScrollBurst, ScrollPace, ScrollRatioEstimate,
-        ScrollTrackerAction, VisibleFloatingButton, VisibleFloatingButtonAction,
-        SCROLL_SETTLE_IDLE_MS,
+        selection_still_trackable_on_monitors, settled_measurement_is_stable,
+        should_follow_scroll_for_source, update_scroll_ratio,
+        visible_floating_button_action_when_idle, HotkeyAction, HotkeyKeyState, MouseButtonEvent,
+        PendingHotkeyAction, PendingSelection, PendingSelectionHoverAction, ScrollBurst,
+        ScrollPace, ScrollRatioEstimate, ScrollTrackerAction, VisibleFloatingButton,
+        VisibleFloatingButtonAction, SCROLL_SETTLE_IDLE_MS,
     },
     platform::{
         ClipboardBackend, InputMonitor, PermissionChecker, PlatformBackend, PlatformFeatureStatus,
@@ -789,6 +789,27 @@ fn tracked_visual_search_rect(
         },
         window_rect,
     )
+}
+
+/// 当前所有显示器的屏幕坐标范围；取不到时返回空表，调用方自行退化。
+fn monitor_screen_rects(app: &tauri::AppHandle) -> Vec<Rect> {
+    let Ok(monitors) = app.available_monitors() else {
+        return Vec::new();
+    };
+
+    monitors
+        .iter()
+        .map(|monitor| {
+            let position = monitor.position();
+            let size = monitor.size();
+            Rect {
+                x: position.x as f64,
+                y: position.y as f64,
+                width: size.width as f64,
+                height: size.height as f64,
+            }
+        })
+        .collect()
 }
 
 fn source_window_screen_rect(source_window_handle: isize) -> Option<Rect> {
@@ -1699,7 +1720,11 @@ fn measure_and_follow_selection(
     };
 
     if let Some(window_rect) = source_window_screen_rect(snapshot.source_window_handle) {
-        if !selection_still_trackable(placement_rect, window_rect) {
+        if !selection_still_trackable_on_monitors(
+            placement_rect,
+            window_rect,
+            &monitor_screen_rects(app),
+        ) {
             // 放弃是**持久**动作：隐藏操作条，并让下一轮也先保持隐藏。所以在
             // 执行前必须确认这次测量没有被后续滚轮取代——尤其是反向滚动会把
             // 选区重新带回视口，此时拿一份过期的「已滚出视口」结论去放弃，
