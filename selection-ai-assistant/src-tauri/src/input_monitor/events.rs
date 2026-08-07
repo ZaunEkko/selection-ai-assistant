@@ -385,14 +385,50 @@ pub enum ScrollTrackerAction {
 
 /// 这次测量之后，是否可以认为「已经吸附到最终位置」。
 ///
-/// 必须同时满足两个条件，缺一不可：
+/// 必须同时满足三个条件，缺一不可：
 /// - `settled`：距最后一个滚轮事件已超过 [`SCROLL_SETTLE_IDLE_MS`]；
-/// - 位移停止：本次测得的 y 相对上一次几乎没变。
+/// - 位移停止：本次测得的 y 相对上一次几乎没变；
+/// - 裁剪停止：本次测得的高度相对上一次几乎没变。
 ///
 /// 只看 `settled` 是不够的——平滑滚动动画可能比静止阈值更长，此时内容仍在
 /// 移动，用那一帧的位置收尾会把操作条永久留在动画中途的位置上。
-pub fn settled_measurement_is_stable(settled: bool, measured_delta_y: f64) -> bool {
-    settled && measured_delta_y.abs() < SCROLL_SETTLE_STABLE_EPSILON_PX
+///
+/// 只看 y 也不够。多行选区从视口**顶部**滚出时，UIA 的
+/// `GetBoundingRectangles` 返回的是裁剪后的矩形：首行被上边缘切掉一截，
+/// `y` 就被钉在视口顶边不再变化，而高度还在持续缩小。此时只比 y 会看到
+/// 连续两帧「没动」而提前判稳，把操作条定死在一个正在滚走的选区上。
+/// 高度仍在变 == 裁剪仍在推进 == 内容其实还在动。
+///
+/// 两个 delta 都必须来自**未经压缩**的测量几何。`scroll_follow_placement_rect`
+/// 会把高度钳到 36px，压缩之后的高度在裁剪过程中大部分时间是常数 36，
+/// 这个信号就没了。
+pub fn settled_measurement_is_stable(
+    settled: bool,
+    measured_delta_y: f64,
+    measured_delta_height: f64,
+) -> bool {
+    settled
+        && measured_delta_y.abs() < SCROLL_SETTLE_STABLE_EPSILON_PX
+        && measured_delta_height.abs() < SCROLL_SETTLE_STABLE_EPSILON_PX
+}
+
+/// 新的跟随会话是否应当以**隐藏**状态启动。
+///
+/// 三种情况都不能在启动时就把操作条摆出来，共同的原则是「不在未经验证的
+/// 位置上渲染」：
+///
+/// - `pace == Fast`：快滚期间刻意不测量，摆出去的只能是预测值；
+/// - `recovering_from_abandon`：上一轮已经确认选区找不到了，凭预测摆回去
+///   就是在无关内容上凭空生出一个幽灵操作条；
+/// - `!has_seed_geometry`：剪贴板兜底选区没有 `selection_rects`、也没有视觉
+///   状态，连预测所需的起始 y 都不存在。此时会话仍然启动（这样才有机会由
+///   tracker 线程从 UIA 取到第一帧真实几何），但必须先隐藏着等。
+pub fn scroll_follow_starts_hidden(
+    pace: ScrollPace,
+    recovering_from_abandon: bool,
+    has_seed_geometry: bool,
+) -> bool {
+    pace == ScrollPace::Fast || recovering_from_abandon || !has_seed_geometry
 }
 
 /// 决定跟随线程这一帧该做什么。

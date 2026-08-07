@@ -3,15 +3,15 @@ use selection_ai_assistant_lib::input_monitor::events::{
     apply_mouse_up_action_to_pending_selection, classify_mouse_up, consume_pending_selection,
     handle_hotkey_state, handle_mouse_button_event, hover_action_for_pending_selection,
     hover_action_for_pending_selection_when_idle, is_drag_distance_met, manual_hotkey_trigger_key,
-    predicted_scroll_offset, scroll_tracker_action, selection_geometry_matches_drag_gesture,
-    selection_rects_match_drag_gesture, selection_still_trackable,
-    selection_still_trackable_on_monitors, settled_measurement_is_stable,
-    should_follow_scroll_for_source, update_scroll_ratio, visible_floating_button_action_when_idle,
-    HotkeyAction, HotkeyKeyState, MouseButtonEvent, MouseUpAction, PendingHotkeyAction,
-    PendingSelection, PendingSelectionHoverAction, ScrollBurst, ScrollPace, ScrollTrackerAction,
-    SelectionMouseUpEffect, VisibleFloatingButton, VisibleFloatingButtonAction,
-    DEFAULT_PIXELS_PER_WHEEL_DELTA, MAX_SCROLL_MEASURE_FAILURES, SCROLL_SETTLE_IDLE_MS,
-    SCROLL_SETTLE_STABLE_EPSILON_PX,
+    predicted_scroll_offset, scroll_follow_starts_hidden, scroll_tracker_action,
+    selection_geometry_matches_drag_gesture, selection_rects_match_drag_gesture,
+    selection_still_trackable, selection_still_trackable_on_monitors,
+    settled_measurement_is_stable, should_follow_scroll_for_source, update_scroll_ratio,
+    visible_floating_button_action_when_idle, HotkeyAction, HotkeyKeyState, MouseButtonEvent,
+    MouseUpAction, PendingHotkeyAction, PendingSelection, PendingSelectionHoverAction, ScrollBurst,
+    ScrollPace, ScrollTrackerAction, SelectionMouseUpEffect, VisibleFloatingButton,
+    VisibleFloatingButtonAction, DEFAULT_PIXELS_PER_WHEEL_DELTA, MAX_SCROLL_MEASURE_FAILURES,
+    SCROLL_SETTLE_IDLE_MS, SCROLL_SETTLE_STABLE_EPSILON_PX,
 };
 use selection_ai_assistant_lib::types::{Point, Rect};
 
@@ -945,20 +945,64 @@ fn session_finishes_after_settled_measurement() {
 fn settle_requires_motion_to_stop_not_just_idle_time() {
     // 动画中途：空闲时间已到，但相邻两次测量仍有明显位移 => 不算吸附完成。
     // 37px 取自实测：最后一次静止前采样时，内容还差约一半没走完。
-    assert!(!settled_measurement_is_stable(true, 37.0));
-    assert!(!settled_measurement_is_stable(true, -37.0));
+    assert!(!settled_measurement_is_stable(true, 37.0, 0.0));
+    assert!(!settled_measurement_is_stable(true, -37.0, 0.0));
     // 刚好超过容差也不算。
     assert!(!settled_measurement_is_stable(
         true,
-        SCROLL_SETTLE_STABLE_EPSILON_PX
+        SCROLL_SETTLE_STABLE_EPSILON_PX,
+        0.0
     ));
 
     // 还没静止时，即使这一帧没动也不能收尾——可能只是动画的匀速段之间。
-    assert!(!settled_measurement_is_stable(false, 0.0));
+    assert!(!settled_measurement_is_stable(false, 0.0, 0.0));
 
     // 静止 + 位移停止 => 才是真正的最终位置。
-    assert!(settled_measurement_is_stable(true, 0.0));
-    assert!(settled_measurement_is_stable(true, 1.0));
+    assert!(settled_measurement_is_stable(true, 0.0, 0.0));
+    assert!(settled_measurement_is_stable(true, 1.0, 0.0));
+}
+
+/// 多行选区从视口**顶部**滚出时，UIA 返回的是裁剪后的矩形：首行被上边缘
+/// 切掉一截，`y` 被钉在视口顶边不再变化，只有高度还在缩小。只比 y 会看到
+/// 连续两帧「没动」而提前判稳，把操作条定死在一个正在滚走的选区上。
+#[test]
+fn settle_requires_clipping_to_stop_not_just_vertical_motion() {
+    // y 不动（被顶边钉住），但高度还在被裁掉 => 内容其实还在滚。
+    assert!(!settled_measurement_is_stable(true, 0.0, -18.0));
+    // 反向：从顶部滚回来时高度在恢复，同样不算稳。
+    assert!(!settled_measurement_is_stable(true, 0.0, 18.0));
+    // 刚好达到容差也不算。
+    assert!(!settled_measurement_is_stable(
+        true,
+        0.0,
+        SCROLL_SETTLE_STABLE_EPSILON_PX
+    ));
+
+    // 高度抖动在容差内（像素扫描的边缘噪声）仍算稳，否则永远收不了尾。
+    assert!(settled_measurement_is_stable(true, 0.0, 1.0));
+    assert!(settled_measurement_is_stable(true, 0.0, -1.0));
+
+    // 两个维度是与的关系：任一还在变就不算稳。
+    assert!(!settled_measurement_is_stable(true, 37.0, -18.0));
+}
+
+/// 剪贴板兜底选区（`selection_rects` 为空、也没有视觉状态）此前根本启动不了
+/// 跟随，滚动时操作条固定不动。现在会话照常启动，但必须先隐藏着等 UIA 供出
+/// 第一帧真实几何——连预测所需的起始 y 都不存在，摆出去的只能是凭空造的。
+#[test]
+fn session_without_seed_geometry_starts_hidden() {
+    // 有种子几何 + 慢滚 + 不是从放弃中恢复 => 正常显示。
+    assert!(!scroll_follow_starts_hidden(ScrollPace::Slow, false, true));
+
+    // 没有种子几何 => 隐藏，哪怕其它条件都正常。
+    assert!(scroll_follow_starts_hidden(ScrollPace::Slow, false, false));
+
+    // 三个条件是或的关系，各自都能单独触发隐藏。
+    assert!(scroll_follow_starts_hidden(ScrollPace::Fast, false, true));
+    assert!(scroll_follow_starts_hidden(ScrollPace::Slow, true, true));
+
+    // 叠加时同样隐藏。
+    assert!(scroll_follow_starts_hidden(ScrollPace::Fast, true, false));
 }
 
 #[test]
