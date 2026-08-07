@@ -95,6 +95,18 @@ jobs:
         with:
           components: rustfmt
 
+      # Must stay after the toolchain step: the cache key includes the rustc version.
+      - name: Cache Rust build artifacts
+        if: ${{ needs.scope.outputs.run_full == 'true' }}
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: selection-ai-assistant/src-tauri -> target
+          # cargo-audit.exe has its own version-keyed cache below.
+          cache-bin: false
+          # Pull request caches are scoped to the pull request and cannot be reused
+          # elsewhere, so only push builds on main and dev write the cache.
+          save-if: ${{ github.event_name == 'push' }}
+
       - name: Install frontend dependencies
         if: ${{ needs.scope.outputs.run_full == 'true' }}
         working-directory: selection-ai-assistant
@@ -168,6 +180,14 @@ jobs:
       - name: Set up Rust 1.88
         if: ${{ needs.scope.outputs.run_full == 'true' }}
         uses: dtolnay/rust-toolchain@1.88.0
+
+      # Must stay after the toolchain step: the cache key includes the rustc version.
+      - name: Cache Rust build artifacts
+        if: ${{ needs.scope.outputs.run_full == 'true' }}
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: selection-ai-assistant/src-tauri -> target
+          save-if: ${{ github.event_name == 'push' }}
 
       - name: Check declared MSRV
         if: ${{ needs.scope.outputs.run_full == 'true' }}
