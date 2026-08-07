@@ -70,7 +70,7 @@ use crate::{
         visible_floating_button_action_when_idle, HotkeyAction, HotkeyKeyState, MouseButtonEvent,
         PendingHotkeyAction, PendingSelection, PendingSelectionHoverAction, ScrollBurst,
         ScrollPace, ScrollRatioEstimate, ScrollTrackerAction, VisibleFloatingButton,
-        VisibleFloatingButtonAction, SCROLL_SETTLE_IDLE_MS,
+        VisibleFloatingButtonAction, SCROLL_SETTLE_IDLE_MS, SCROLL_SETTLE_STABLE_EPSILON_PX,
     },
     platform::{
         ClipboardBackend, InputMonitor, PermissionChecker, PlatformBackend, PlatformFeatureStatus,
@@ -1861,6 +1861,7 @@ fn measure_and_follow_selection(
         placement_rect,
         measured_visual,
         trackable,
+        step_delta_height,
         measurement_is_stable,
         will_show,
     );
@@ -1973,6 +1974,7 @@ fn apply_scroll_measurement(
     placement_rect: Rect,
     measured_visual: Option<SelectionVisualState>,
     trackable: bool,
+    step_delta_height: f64,
     measurement_is_stable: bool,
     will_show: bool,
 ) -> ScrollFollowCommit {
@@ -2008,6 +2010,19 @@ fn apply_scroll_measurement(
     tracker.last_measured_y = measured_rect.y;
     // 存原始高度，不是 placement_rect 那个已压缩的。
     tracker.last_measured_height = measured_rect.height;
+
+    // 这一帧还在被裁剪 => 本段位移的测量值不代表真实滚动距离，作废比例学习窗口。
+    //
+    // 测量对象是多行选区的**首行**。它被视口顶边裁剪时 y 会被钉住，测得的位移
+    // 小于内容真实位移，拿去算比例会系统性偏小。实测：同样 -120 delta，未被
+    // 裁剪时测得 -84px（0.700），裁剪中只测得 -56px（0.467，低估 33%）。
+    // 比例偏小会让预测追不上真实滚动，正是 #42 花大力气修掉的那类观感。
+    //
+    // 与 invalidate_scroll_ratio_burst 是同一类处置：那条针对「中间有没测到的
+    // 空档」，这条针对「测到了但测的不是真实位移」。
+    if step_delta_height.abs() >= SCROLL_SETTLE_STABLE_EPSILON_PX {
+        tracker.ratio_burst_valid = false;
+    }
     if measurement_is_stable && will_show {
         // 这一段滚动结算完毕，重置位移起点。只扣掉本次快照已计入的 delta，
         // 测量期间新到的滚轮事件要保留。无论这段是否可信都要重置：
