@@ -3,11 +3,14 @@ use selection_ai_assistant_lib::input_monitor::events::{
     apply_mouse_up_action_to_pending_selection, classify_mouse_up, consume_pending_selection,
     handle_hotkey_state, handle_mouse_button_event, hover_action_for_pending_selection,
     hover_action_for_pending_selection_when_idle, is_drag_distance_met, manual_hotkey_trigger_key,
-    selection_geometry_matches_drag_gesture, selection_rects_match_drag_gesture,
-    should_follow_scroll_for_source, visible_floating_button_action_when_idle, HotkeyAction,
-    HotkeyKeyState, MouseButtonEvent, MouseUpAction, PendingHotkeyAction, PendingSelection,
-    PendingSelectionHoverAction, SelectionMouseUpEffect, VisibleFloatingButton,
-    VisibleFloatingButtonAction,
+    predicted_scroll_offset, scroll_tracker_action, selection_geometry_matches_drag_gesture,
+    selection_rects_match_drag_gesture, selection_still_trackable, settled_measurement_is_stable,
+    should_follow_scroll_for_source, update_scroll_ratio, visible_floating_button_action_when_idle,
+    HotkeyAction, HotkeyKeyState, MouseButtonEvent, MouseUpAction, PendingHotkeyAction,
+    PendingSelection, PendingSelectionHoverAction, ScrollBurst, ScrollPace, ScrollTrackerAction,
+    SelectionMouseUpEffect, VisibleFloatingButton, VisibleFloatingButtonAction,
+    DEFAULT_PIXELS_PER_WHEEL_DELTA, MAX_SCROLL_MEASURE_FAILURES, SCROLL_SETTLE_IDLE_MS,
+    SCROLL_SETTLE_STABLE_EPSILON_PX,
 };
 use selection_ai_assistant_lib::types::{Point, Rect};
 
@@ -772,4 +775,251 @@ fn non_browser_source_keeps_scroll_follow_enabled() {
 #[test]
 fn default_hover_delay_is_one_second() {
     assert_eq!(AppConfig::default().hover_delay_ms, 1_000);
+}
+
+// --- 滚动跟随：比例学习 ---
+
+#[test]
+fn scroll_ratio_learns_real_step_from_first_measurement() {
+    // 一个滚轮刻度 = 120 delta。某编辑器一格滚 3 行 x 19px = 57px。
+    let estimate = update_scroll_ratio(None, -120.0, -57.0).expect("应当学到比例");
+    assert!((estimate.pixels_per_delta - 0.475).abs() < 1e-6);
+    assert_eq!(estimate.samples, 1);
+}
+
+#[test]
+fn scroll_ratio_blends_later_measurements() {
+    let first = update_scroll_ratio(None, -120.0, -57.0).expect("首次测量");
+    let second = update_scroll_ratio(Some(first), -120.0, -72.0).expect("二次测量");
+    // EMA: 0.475 * 0.6 + 0.6 * 0.4
+    assert!((second.pixels_per_delta - 0.525).abs() < 1e-6);
+    assert_eq!(second.samples, 2);
+}
+
+#[test]
+fn scroll_ratio_rejects_measurement_against_wheel_direction() {
+    let current = update_scroll_ratio(None, -120.0, -57.0);
+    // 向下滚但测到选区往下移：多半是误检到别的高亮块，不能写进估计值。
+    let unchanged = update_scroll_ratio(current, -120.0, 57.0);
+    assert_eq!(unchanged, current);
+}
+
+#[test]
+fn scroll_ratio_ignores_noise_sized_movement() {
+    let current = update_scroll_ratio(None, -120.0, -57.0);
+    let unchanged = update_scroll_ratio(current, -120.0, -1.0);
+    assert_eq!(unchanged, current);
+}
+
+#[test]
+fn scroll_ratio_stays_within_sane_bounds() {
+    let absurd = update_scroll_ratio(None, 120.0, 100_000.0).expect("仍应有值");
+    assert!(absurd.pixels_per_delta <= 2.2);
+
+    let tiny = update_scroll_ratio(None, 120.0, 3.0).expect("仍应有值");
+    assert!(tiny.pixels_per_delta >= 0.08);
+}
+
+#[test]
+fn predicted_offset_falls_back_to_default_ratio() {
+    let offset = predicted_scroll_offset(None, -120.0);
+    assert!((offset - (-120.0 * DEFAULT_PIXELS_PER_WHEEL_DELTA)).abs() < 1e-6);
+}
+
+#[test]
+fn predicted_offset_uses_learned_ratio_once_measured() {
+    let estimate = update_scroll_ratio(None, -120.0, -57.0);
+    assert!((predicted_scroll_offset(estimate, -120.0) - (-57.0)).abs() < 1e-6);
+}
+
+// --- 滚动跟随：快慢节奏 ---
+
+#[test]
+fn single_notch_scrolling_counts_as_slow() {
+    let mut burst = ScrollBurst::default();
+    assert_eq!(burst.register(-120.0, 0), ScrollPace::Slow);
+    assert_eq!(burst.register(-120.0, 50), ScrollPace::Slow);
+}
+
+#[test]
+fn rapid_multi_notch_burst_counts_as_fast() {
+    let mut burst = ScrollBurst::default();
+    burst.register(-120.0, 0);
+    burst.register(-120.0, 50);
+    assert_eq!(burst.register(-120.0, 100), ScrollPace::Fast);
+}
+
+#[test]
+fn scroll_burst_window_expires_and_restarts_slow() {
+    let mut burst = ScrollBurst::default();
+    burst.register(-120.0, 0);
+    burst.register(-120.0, 50);
+    assert_eq!(burst.register(-120.0, 100), ScrollPace::Fast);
+    // 停止滚动后节奏衰减到零，下一次滚动重新从慢速开始。
+    assert_eq!(burst.register(-120.0, 400), ScrollPace::Slow);
+    assert!((burst.accumulated_notches() - 1.0).abs() < 1e-6);
+}
+
+#[test]
+fn sustained_fast_scrolling_does_not_flicker_back_to_slow() {
+    // 回归测试：早期的固定翻滚窗口在窗口到期时会把计数清零，持续快滚
+    // 会周期性掉回 Slow，操作条随之隐藏/显示反复闪烁。
+    let mut burst = ScrollBurst::default();
+    let mut paces = Vec::new();
+    for tick in 0..15 {
+        paces.push(burst.register(-120.0, tick * 40));
+    }
+
+    let transitions = paces.windows(2).filter(|pair| pair[0] != pair[1]).count();
+    assert_eq!(transitions, 1, "持续快滚只应该有一次 Slow -> Fast 切换");
+    assert_eq!(paces.last(), Some(&ScrollPace::Fast));
+}
+
+#[test]
+fn borderline_scroll_speed_does_not_oscillate() {
+    // 速度停在阈值附近时，迟滞应当避免在隐藏/显示之间来回跳。
+    let mut burst = ScrollBurst::default();
+    let mut paces = Vec::new();
+    for tick in 0..12 {
+        paces.push(burst.register(-120.0, tick * 120));
+    }
+
+    let transitions = paces.windows(2).filter(|pair| pair[0] != pair[1]).count();
+    assert!(
+        transitions <= 1,
+        "边界速度不应反复切换，实际切换 {transitions} 次"
+    );
+}
+
+#[test]
+fn reading_speed_scrolling_keeps_following() {
+    let mut burst = ScrollBurst::default();
+    for tick in 0..8 {
+        assert_eq!(burst.register(-120.0, tick * 250), ScrollPace::Slow);
+    }
+}
+
+// --- 滚动跟随：会话状态机 ---
+
+#[test]
+fn slow_scroll_keeps_measuring() {
+    assert_eq!(
+        scroll_tracker_action(ScrollPace::Slow, 0, 0, false),
+        ScrollTrackerAction::Measure
+    );
+}
+
+#[test]
+fn fast_scroll_stays_hidden_until_it_settles() {
+    assert_eq!(
+        scroll_tracker_action(ScrollPace::Fast, 0, 0, false),
+        ScrollTrackerAction::WaitHidden
+    );
+    // 静止后立刻量一次，用于吸附回真实选区。
+    assert_eq!(
+        scroll_tracker_action(ScrollPace::Fast, SCROLL_SETTLE_IDLE_MS, 0, false),
+        ScrollTrackerAction::Measure
+    );
+}
+
+#[test]
+fn session_finishes_after_settled_measurement() {
+    assert_eq!(
+        scroll_tracker_action(ScrollPace::Fast, SCROLL_SETTLE_IDLE_MS, 0, true),
+        ScrollTrackerAction::Finish
+    );
+    assert_eq!(
+        scroll_tracker_action(ScrollPace::Slow, SCROLL_SETTLE_IDLE_MS, 0, true),
+        ScrollTrackerAction::Finish
+    );
+}
+
+/// 回归：空闲时间到了不等于画面停了，此时绝不能判定吸附完成。
+///
+/// 实测 Windows 11 记事本滚一格，内容移动约 83px，而平滑滚动动画比 150ms
+/// 的静止阈值更长。旧实现只要求「静止后测到过一次」，于是在动画播到约一半
+/// 时就收尾，把中途位置定死：操作条最终偏离选区约 46px，静置 3 秒也不修正。
+/// 同一原因让学到的滚动比例偏小 8 倍（0.080 px/delta，真实约 0.69）。
+#[test]
+fn settle_requires_motion_to_stop_not_just_idle_time() {
+    // 动画中途：空闲时间已到，但相邻两次测量仍有明显位移 => 不算吸附完成。
+    // 37px 取自实测：最后一次静止前采样时，内容还差约一半没走完。
+    assert!(!settled_measurement_is_stable(true, 37.0));
+    assert!(!settled_measurement_is_stable(true, -37.0));
+    // 刚好超过容差也不算。
+    assert!(!settled_measurement_is_stable(
+        true,
+        SCROLL_SETTLE_STABLE_EPSILON_PX
+    ));
+
+    // 还没静止时，即使这一帧没动也不能收尾——可能只是动画的匀速段之间。
+    assert!(!settled_measurement_is_stable(false, 0.0));
+
+    // 静止 + 位移停止 => 才是真正的最终位置。
+    assert!(settled_measurement_is_stable(true, 0.0));
+    assert!(settled_measurement_is_stable(true, 1.0));
+}
+
+#[test]
+fn repeated_measure_failures_abandon_instead_of_guessing() {
+    assert_eq!(
+        scroll_tracker_action(ScrollPace::Slow, 0, MAX_SCROLL_MEASURE_FAILURES, false),
+        ScrollTrackerAction::Abandon
+    );
+    // 失败判定优先于其它状态。
+    assert_eq!(
+        scroll_tracker_action(ScrollPace::Fast, 5_000, MAX_SCROLL_MEASURE_FAILURES, true),
+        ScrollTrackerAction::Abandon
+    );
+}
+
+// --- 滚动跟随：选区是否还看得见 ---
+
+#[test]
+fn selection_inside_viewport_is_trackable() {
+    let viewport = Rect {
+        x: 0.0,
+        y: 0.0,
+        width: 1920.0,
+        height: 1080.0,
+    };
+    assert!(selection_still_trackable(
+        Rect {
+            x: 100.0,
+            y: 500.0,
+            width: 400.0,
+            height: 20.0,
+        },
+        viewport
+    ));
+}
+
+#[test]
+fn selection_scrolled_out_of_viewport_is_not_trackable() {
+    let viewport = Rect {
+        x: 0.0,
+        y: 0.0,
+        width: 1920.0,
+        height: 1080.0,
+    };
+    // 滚出顶部
+    assert!(!selection_still_trackable(
+        Rect {
+            x: 100.0,
+            y: -100.0,
+            width: 400.0,
+            height: 20.0,
+        },
+        viewport
+    ));
+    // 只剩下几个像素露在底部
+    assert!(!selection_still_trackable(
+        Rect {
+            x: 100.0,
+            y: 1076.0,
+            width: 400.0,
+            height: 20.0,
+        },
+        viewport
+    ));
 }
