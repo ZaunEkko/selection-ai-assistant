@@ -385,14 +385,31 @@ pub enum ScrollTrackerAction {
 
 /// 这次测量之后，是否可以认为「已经吸附到最终位置」。
 ///
-/// 必须同时满足两个条件，缺一不可：
+/// 必须同时满足三个条件，缺一不可：
 /// - `settled`：距最后一个滚轮事件已超过 [`SCROLL_SETTLE_IDLE_MS`]；
-/// - 位移停止：本次测得的 y 相对上一次几乎没变。
+/// - 位移停止：本次测得的 y 相对上一次几乎没变；
+/// - 裁剪停止：本次测得的高度相对上一次几乎没变。
 ///
 /// 只看 `settled` 是不够的——平滑滚动动画可能比静止阈值更长，此时内容仍在
 /// 移动，用那一帧的位置收尾会把操作条永久留在动画中途的位置上。
-pub fn settled_measurement_is_stable(settled: bool, measured_delta_y: f64) -> bool {
-    settled && measured_delta_y.abs() < SCROLL_SETTLE_STABLE_EPSILON_PX
+///
+/// 只看 y 也不够。多行选区从视口**顶部**滚出时，UIA 的
+/// `GetBoundingRectangles` 返回的是裁剪后的矩形：首行被上边缘切掉一截，
+/// `y` 就被钉在视口顶边不再变化，而高度还在持续缩小。此时只比 y 会看到
+/// 连续两帧「没动」而提前判稳，把操作条定死在一个正在滚走的选区上。
+/// 高度仍在变 == 裁剪仍在推进 == 内容其实还在动。
+///
+/// 两个 delta 都必须来自**未经压缩**的测量几何。`scroll_follow_placement_rect`
+/// 会把高度钳到 36px，压缩之后的高度在裁剪过程中大部分时间是常数 36，
+/// 这个信号就没了。
+pub fn settled_measurement_is_stable(
+    settled: bool,
+    measured_delta_y: f64,
+    measured_delta_height: f64,
+) -> bool {
+    settled
+        && measured_delta_y.abs() < SCROLL_SETTLE_STABLE_EPSILON_PX
+        && measured_delta_height.abs() < SCROLL_SETTLE_STABLE_EPSILON_PX
 }
 
 /// 决定跟随线程这一帧该做什么。

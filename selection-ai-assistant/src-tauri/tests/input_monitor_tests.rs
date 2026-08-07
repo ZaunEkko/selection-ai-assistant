@@ -945,20 +945,45 @@ fn session_finishes_after_settled_measurement() {
 fn settle_requires_motion_to_stop_not_just_idle_time() {
     // 动画中途：空闲时间已到，但相邻两次测量仍有明显位移 => 不算吸附完成。
     // 37px 取自实测：最后一次静止前采样时，内容还差约一半没走完。
-    assert!(!settled_measurement_is_stable(true, 37.0));
-    assert!(!settled_measurement_is_stable(true, -37.0));
+    assert!(!settled_measurement_is_stable(true, 37.0, 0.0));
+    assert!(!settled_measurement_is_stable(true, -37.0, 0.0));
     // 刚好超过容差也不算。
     assert!(!settled_measurement_is_stable(
         true,
-        SCROLL_SETTLE_STABLE_EPSILON_PX
+        SCROLL_SETTLE_STABLE_EPSILON_PX,
+        0.0
     ));
 
     // 还没静止时，即使这一帧没动也不能收尾——可能只是动画的匀速段之间。
-    assert!(!settled_measurement_is_stable(false, 0.0));
+    assert!(!settled_measurement_is_stable(false, 0.0, 0.0));
 
     // 静止 + 位移停止 => 才是真正的最终位置。
-    assert!(settled_measurement_is_stable(true, 0.0));
-    assert!(settled_measurement_is_stable(true, 1.0));
+    assert!(settled_measurement_is_stable(true, 0.0, 0.0));
+    assert!(settled_measurement_is_stable(true, 1.0, 0.0));
+}
+
+/// 多行选区从视口**顶部**滚出时，UIA 返回的是裁剪后的矩形：首行被上边缘
+/// 切掉一截，`y` 被钉在视口顶边不再变化，只有高度还在缩小。只比 y 会看到
+/// 连续两帧「没动」而提前判稳，把操作条定死在一个正在滚走的选区上。
+#[test]
+fn settle_requires_clipping_to_stop_not_just_vertical_motion() {
+    // y 不动（被顶边钉住），但高度还在被裁掉 => 内容其实还在滚。
+    assert!(!settled_measurement_is_stable(true, 0.0, -18.0));
+    // 反向：从顶部滚回来时高度在恢复，同样不算稳。
+    assert!(!settled_measurement_is_stable(true, 0.0, 18.0));
+    // 刚好达到容差也不算。
+    assert!(!settled_measurement_is_stable(
+        true,
+        0.0,
+        SCROLL_SETTLE_STABLE_EPSILON_PX
+    ));
+
+    // 高度抖动在容差内（像素扫描的边缘噪声）仍算稳，否则永远收不了尾。
+    assert!(settled_measurement_is_stable(true, 0.0, 1.0));
+    assert!(settled_measurement_is_stable(true, 0.0, -1.0));
+
+    // 两个维度是与的关系：任一还在变就不算稳。
+    assert!(!settled_measurement_is_stable(true, 37.0, -18.0));
 }
 
 #[test]

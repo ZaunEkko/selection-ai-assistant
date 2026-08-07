@@ -1270,6 +1270,12 @@ struct ScrollTracker {
     wheel_seq: u64,
     /// 上一次真实测量得到的 y，用于判断动画是否已经停下来。
     last_measured_y: f64,
+    /// 上一次真实测量得到的**未压缩**高度，用于判断裁剪是否还在推进。
+    ///
+    /// 多行选区从视口顶部滚出时 y 会被钉在顶边不动，只有高度还在缩小。
+    /// 存压缩后的高度没用：`scroll_follow_placement_rect` 钳到 36px 之后，
+    /// 裁剪过程中它大部分时间是常数。
+    last_measured_height: f64,
     /// 上一次「动画已停」时的 y，作为学习滚动比例的位移起点。
     ///
     /// 比例必须用整段位移去算：动画中途的采样只走完了一小部分，
@@ -1311,6 +1317,7 @@ struct ScrollTrackerSnapshot {
     pending_wheel_delta: f64,
     tracked_rect: Rect,
     last_measured_y: f64,
+    last_measured_height: f64,
     ratio_anchor_y: f64,
     ratio_burst_valid: bool,
     wheel_seq: u64,
@@ -1395,6 +1402,7 @@ fn scroll_tracker_snapshot(session_id: u64) -> Option<ScrollTrackerSnapshot> {
         pending_wheel_delta: tracker.pending_wheel_delta,
         tracked_rect: tracker.tracked_rect,
         last_measured_y: tracker.last_measured_y,
+        last_measured_height: tracker.last_measured_height,
         ratio_anchor_y: tracker.ratio_anchor_y,
         ratio_burst_valid: tracker.ratio_burst_valid,
         wheel_seq: tracker.wheel_seq,
@@ -1609,6 +1617,10 @@ fn follow_visible_floating_button_after_scroll(
                 tracked_rect: predicted_rect,
                 tracked_rect_measured: false,
                 last_measured_y: current_rect.y,
+                // 起始高度来自尚未验证的种子矩形（可能已被压缩）。第一次真实
+                // 测量会把它换成原始高度；在那之前 tracked_rect_measured 为
+                // false，稳定性判定本来就不该据此收尾。
+                last_measured_height: current_rect.height,
                 ratio_anchor_y: current_rect.y,
                 // 快速滚动一开始就不测量；基线若不是测量得来的，同样不能
                 // 拿这段位移去学比例——等第一次稳定测量重新锚定后再说。
@@ -1755,12 +1767,16 @@ fn measure_and_follow_selection(
         };
 
     // 只跟随纵向位移：横向沿用原选区的 x/width，避免检测抖动让操作条左右乱跳。
-    let placement_rect = Rect {
+    //
+    // 高度在这里才压缩。measured_rect 保持测量到的原始高度，供下面的稳定性
+    // 判定识别「裁剪仍在推进」；压缩后的高度在裁剪过程中大多是常数 36，
+    // 拿它判定等于没判。
+    let placement_rect = scroll_follow_placement_rect(Rect {
         x: snapshot.tracked_rect.x,
         width: snapshot.tracked_rect.width,
         y: measured_rect.y,
         height: measured_rect.height,
-    };
+    });
 
     let trackable =
         source_window_screen_rect(snapshot.source_window_handle).is_none_or(|window_rect| {
@@ -1771,9 +1787,11 @@ fn measure_and_follow_selection(
             )
         });
 
-    // 相邻两次测量几乎没有位移 => 应用的滚动动画已经播完。
+    // 相邻两次测量既没有位移、也没有继续被裁剪 => 应用的滚动动画已经播完。
     let step_delta_y = measured_rect.y - snapshot.last_measured_y;
-    let measurement_is_stable = settled_measurement_is_stable(settled, step_delta_y);
+    let step_delta_height = measured_rect.height - snapshot.last_measured_height;
+    let measurement_is_stable =
+        settled_measurement_is_stable(settled, step_delta_y, step_delta_height);
 
     // 因快速滚动而隐藏的操作条，必须等动画真的停下来才能重新出现。空闲时间
     // 一到就把它显示在中途位置上，它会跟着剩余动画一路追，正是要消灭的观感。
@@ -1958,6 +1976,8 @@ fn apply_scroll_measurement(
     tracker.tracked_rect = placement_rect;
     tracker.tracked_rect_measured = true;
     tracker.last_measured_y = measured_rect.y;
+    // 存原始高度，不是 placement_rect 那个已压缩的。
+    tracker.last_measured_height = measured_rect.height;
     if measurement_is_stable && will_show {
         // 这一段滚动结算完毕，重置位移起点。只扣掉本次快照已计入的 delta，
         // 测量期间新到的滚轮事件要保留。无论这段是否可信都要重置：
@@ -2078,8 +2098,11 @@ fn measure_tracked_selection_rect(
                 if let Some(found) = visual_selection_within(visual, search_rect, &excluded_rects) {
                     // 不在这里写回：扫描期间选区可能已经被替换，
                     // 立刻落盘会用旧选区的视觉状态覆盖掉新选区的。
+                    //
+                    // 返回**未经压缩**的几何：高度要留给稳定性判定用，
+                    // 压缩推迟到构造放置矩形时。
                     return MeasureOutcome::Measured {
-                        rect: scroll_follow_placement_rect(found.rect),
+                        rect: found.rect,
                         visual: Some(found),
                     };
                 }
@@ -2128,12 +2151,13 @@ fn measure_tracked_selection_rect(
             return MeasureOutcome::Failed;
         }
     }
+    // 同样返回未经压缩的几何。UIA 对部分滚出视口的文本范围返回的是裁剪后的
+    // 矩形，那个逐帧缩小的高度正是判定「裁剪是否仍在推进」的依据。
     uia_result
         .rects
         .iter()
         .copied()
         .find(is_valid_rect)
-        .map(scroll_follow_placement_rect)
         .map_or(MeasureOutcome::Failed, |rect| MeasureOutcome::Measured {
             rect,
             visual: None,
