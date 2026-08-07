@@ -1,6 +1,6 @@
 [package]
 name = "selection-ai-assistant"
-version = "0.3.1"
+version = "0.3.2"
 description = "Selection AI Assistant"
 authors = ["Selection AI Assistant Contributors"]
 license = "MIT"

@@ -64,13 +64,13 @@ use crate::{
     input_monitor::events::{
         consume_pending_selection, handle_hotkey_state,
         hover_action_for_pending_selection_when_idle, manual_hotkey_trigger_key,
-        predicted_scroll_offset, scroll_tracker_action, selection_geometry_matches_drag_gesture,
-        selection_still_trackable_on_monitors, settled_measurement_is_stable,
-        should_follow_scroll_for_source, update_scroll_ratio,
+        predicted_scroll_offset, scroll_follow_starts_hidden, scroll_tracker_action,
+        selection_geometry_matches_drag_gesture, selection_still_trackable_on_monitors,
+        settled_measurement_is_stable, should_follow_scroll_for_source, update_scroll_ratio,
         visible_floating_button_action_when_idle, HotkeyAction, HotkeyKeyState, MouseButtonEvent,
         PendingHotkeyAction, PendingSelection, PendingSelectionHoverAction, ScrollBurst,
         ScrollPace, ScrollRatioEstimate, ScrollTrackerAction, VisibleFloatingButton,
-        VisibleFloatingButtonAction, SCROLL_SETTLE_IDLE_MS,
+        VisibleFloatingButtonAction, SCROLL_SETTLE_IDLE_MS, SCROLL_SETTLE_STABLE_EPSILON_PX,
     },
     platform::{
         ClipboardBackend, InputMonitor, PermissionChecker, PlatformBackend, PlatformFeatureStatus,
@@ -1259,7 +1259,13 @@ struct ScrollTracker {
     /// 自上次成功测量以来累计的滚轮 delta，用于反推真实滚动比例。
     pending_wheel_delta: f64,
     /// 当前认为选区所在的矩形（预测或测量得到）。
-    tracked_rect: Rect,
+    ///
+    /// `None` 表示**尚无任何几何**：剪贴板兜底选区（`selection_rects` 为空、
+    /// 也没有视觉状态）就是这种情况。此时会话仍然启动，但保持隐藏、不做预测，
+    /// 等 tracker 线程从 UIA 取到第一帧真实几何再开始跟随。
+    ///
+    /// 不能拿一个占位矩形代替：那等于凭空造几何，正是幽灵操作条的来源。
+    tracked_rect: Option<Rect>,
     /// `tracked_rect` 是否来自真实测量。预测值不能当作下一轮的位移基线。
     tracked_rect_measured: bool,
     /// 滚轮事件序号，每来一个事件自增。
@@ -1270,6 +1276,12 @@ struct ScrollTracker {
     wheel_seq: u64,
     /// 上一次真实测量得到的 y，用于判断动画是否已经停下来。
     last_measured_y: f64,
+    /// 上一次真实测量得到的**未压缩**高度，用于判断裁剪是否还在推进。
+    ///
+    /// 多行选区从视口顶部滚出时 y 会被钉在顶边不动，只有高度还在缩小。
+    /// 存压缩后的高度没用：`scroll_follow_placement_rect` 钳到 36px 之后，
+    /// 裁剪过程中它大部分时间是常数。
+    last_measured_height: f64,
     /// 上一次「动画已停」时的 y，作为学习滚动比例的位移起点。
     ///
     /// 比例必须用整段位移去算：动画中途的采样只走完了一小部分，
@@ -1309,8 +1321,9 @@ struct ScrollTrackerSnapshot {
     last_wheel_at: Instant,
     pace: ScrollPace,
     pending_wheel_delta: f64,
-    tracked_rect: Rect,
+    tracked_rect: Option<Rect>,
     last_measured_y: f64,
+    last_measured_height: f64,
     ratio_anchor_y: f64,
     ratio_burst_valid: bool,
     wheel_seq: u64,
@@ -1395,6 +1408,7 @@ fn scroll_tracker_snapshot(session_id: u64) -> Option<ScrollTrackerSnapshot> {
         pending_wheel_delta: tracker.pending_wheel_delta,
         tracked_rect: tracker.tracked_rect,
         last_measured_y: tracker.last_measured_y,
+        last_measured_height: tracker.last_measured_height,
         ratio_anchor_y: tracker.ratio_anchor_y,
         ratio_burst_valid: tracker.ratio_burst_valid,
         wheel_seq: tracker.wheel_seq,
@@ -1557,34 +1571,37 @@ fn follow_visible_floating_button_after_scroll(
                 // 会话仍在运行 => 沿用累积预测；已停止 => 只认测量过的几何。
                 let usable = tracker.running || tracker.tracked_rect_measured;
                 (
-                    usable.then_some(tracker.tracked_rect),
+                    usable.then_some(tracker.tracked_rect).flatten(),
                     tracker.tracked_rect_measured,
                     abandoned,
                 )
             })
         })
         .unwrap_or((None, false, false));
-    let Some(current_rect) = reusable_tracked_rect
+    // 可能为 None：剪贴板兜底选区没有 selection_rects，也没有视觉状态。
+    // 此时不再直接返回——会话照样启动，只是保持隐藏、不做预测，由 tracker
+    // 线程从 UIA 取到第一帧真实几何后再开始跟随（issue #44 第 3 条）。
+    let current_rect = reusable_tracked_rect
         .or_else(|| {
             state
                 .latest_selection_visual()
                 .map(|visual| scroll_follow_placement_rect(visual.rect))
         })
-        .or(visible.selection_rect)
-    else {
-        return;
-    };
+        .or(visible.selection_rect);
 
     let pace = scroll_burst.register(wheel_delta, now_ms);
     let predicted_delta_y =
         predicted_scroll_offset(cached_scroll_ratio(&process_name), wheel_delta);
-    let predicted_rect = Rect {
-        y: current_rect.y + predicted_delta_y,
-        ..current_rect
-    };
+    // 没有几何就没有可预测的东西。预测依赖一个起始 y，凭空造一个正是要避免的。
+    let predicted_rect = current_rect.map(|rect| Rect {
+        y: rect.y + predicted_delta_y,
+        ..rect
+    });
 
-    visible.selection_rect = Some(predicted_rect);
-    visible.selection_anchor.y += predicted_delta_y;
+    if let Some(predicted_rect) = predicted_rect {
+        visible.selection_rect = Some(predicted_rect);
+        visible.selection_anchor.y += predicted_delta_y;
+    }
 
     let session_id = next_scroll_session_id();
     let mut started_session = None;
@@ -1608,18 +1625,30 @@ fn follow_visible_floating_button_after_scroll(
                 pending_wheel_delta: wheel_delta,
                 tracked_rect: predicted_rect,
                 tracked_rect_measured: false,
-                last_measured_y: current_rect.y,
-                ratio_anchor_y: current_rect.y,
+                // 没有种子几何时这两项没有意义。填 0 是安全的：
+                // tracked_rect 为 None 时预测和显示都不会发生，而第一次真实
+                // 测量会在使用它们之前把两者都覆盖掉。
+                last_measured_y: current_rect.map(|rect| rect.y).unwrap_or(0.0),
+                // 起始高度来自尚未验证的种子矩形（可能已被压缩）。第一次真实
+                // 测量会把它换成原始高度；在那之前 tracked_rect_measured 为
+                // false，稳定性判定本来就不该据此收尾。
+                last_measured_height: current_rect.map(|rect| rect.height).unwrap_or(0.0),
+                ratio_anchor_y: current_rect.map(|rect| rect.y).unwrap_or(0.0),
                 // 快速滚动一开始就不测量；基线若不是测量得来的，同样不能
                 // 拿这段位移去学比例——等第一次稳定测量重新锚定后再说。
-                ratio_burst_valid: pace != ScrollPace::Fast && baseline_measured,
+                // 没有种子几何时更不能学：位移起点都还不存在。
+                ratio_burst_valid: pace != ScrollPace::Fast
+                    && baseline_measured
+                    && current_rect.is_some(),
                 wheel_seq: 1,
                 abandoned: false,
                 failures: 0,
                 settled_measurement_stable: false,
-                // 上一轮是放弃收场的话，本轮同样先保持隐藏：等真实测量成功
-                // 再显示，不能凭预测把操作条摆回一个已经找不到的选区上。
-                hidden: pace == ScrollPace::Fast || recovering_from_abandon,
+                hidden: scroll_follow_starts_hidden(
+                    pace,
+                    recovering_from_abandon,
+                    current_rect.is_some(),
+                ),
                 process_name,
                 source_window_handle,
             });
@@ -1655,18 +1684,26 @@ fn follow_visible_floating_button_after_scroll(
         trace_selection_monitor(format_args!(
             "scroll follow restarted after abandon; waiting for a real measurement"
         ));
-    } else if let Ok(position) = floating_button_position_for_selection(
-        app,
-        Point {
-            x: predicted_rect.x,
-            y: predicted_rect.y,
-        },
-        &[predicted_rect],
-    ) {
-        if show_floating_button_at_position(app.clone(), position).is_ok() {
-            visible.window_position = position;
-            state.store_latest_floating_button_window_position(position);
+    } else if let Some(predicted_rect) = predicted_rect {
+        if let Ok(position) = floating_button_position_for_selection(
+            app,
+            Point {
+                x: predicted_rect.x,
+                y: predicted_rect.y,
+            },
+            &[predicted_rect],
+        ) {
+            if show_floating_button_at_position(app.clone(), position).is_ok() {
+                visible.window_position = position;
+                state.store_latest_floating_button_window_position(position);
+            }
         }
+    } else {
+        // 还没有任何几何：操作条留在原地，等 tracker 线程从 UIA 取到第一帧。
+        // 不能凭空摆——那正是「不在未经验证的位置渲染」要防的。
+        trace_selection_monitor(format_args!(
+            "scroll follow started without seed geometry; waiting for the first UIA measurement"
+        ));
     }
 
     if let Some(session_id) = started_session {
@@ -1755,12 +1792,21 @@ fn measure_and_follow_selection(
         };
 
     // 只跟随纵向位移：横向沿用原选区的 x/width，避免检测抖动让操作条左右乱跳。
-    let placement_rect = Rect {
-        x: snapshot.tracked_rect.x,
-        width: snapshot.tracked_rect.width,
+    //
+    // 高度在这里才压缩。measured_rect 保持测量到的原始高度，供下面的稳定性
+    // 判定识别「裁剪仍在推进」；压缩后的高度在裁剪过程中大多是常数 36，
+    // 拿它判定等于没判。
+    //
+    // 没有既有几何时（剪贴板兜底选区的第一帧），横向就用这次测到的——
+    // 这一帧正是用来确立基线的。
+    let placement_rect = scroll_follow_placement_rect(Rect {
+        x: snapshot.tracked_rect.map_or(measured_rect.x, |rect| rect.x),
+        width: snapshot
+            .tracked_rect
+            .map_or(measured_rect.width, |rect| rect.width),
         y: measured_rect.y,
         height: measured_rect.height,
-    };
+    });
 
     let trackable =
         source_window_screen_rect(snapshot.source_window_handle).is_none_or(|window_rect| {
@@ -1771,9 +1817,11 @@ fn measure_and_follow_selection(
             )
         });
 
-    // 相邻两次测量几乎没有位移 => 应用的滚动动画已经播完。
+    // 相邻两次测量既没有位移、也没有继续被裁剪 => 应用的滚动动画已经播完。
     let step_delta_y = measured_rect.y - snapshot.last_measured_y;
-    let measurement_is_stable = settled_measurement_is_stable(settled, step_delta_y);
+    let step_delta_height = measured_rect.height - snapshot.last_measured_height;
+    let measurement_is_stable =
+        settled_measurement_is_stable(settled, step_delta_y, step_delta_height);
 
     // 因快速滚动而隐藏的操作条，必须等动画真的停下来才能重新出现。空闲时间
     // 一到就把它显示在中途位置上，它会跟着剩余动画一路追，正是要消灭的观感。
@@ -1813,6 +1861,7 @@ fn measure_and_follow_selection(
         placement_rect,
         measured_visual,
         trackable,
+        step_delta_height,
         measurement_is_stable,
         will_show,
     );
@@ -1925,6 +1974,7 @@ fn apply_scroll_measurement(
     placement_rect: Rect,
     measured_visual: Option<SelectionVisualState>,
     trackable: bool,
+    step_delta_height: f64,
     measurement_is_stable: bool,
     will_show: bool,
 ) -> ScrollFollowCommit {
@@ -1955,9 +2005,24 @@ fn apply_scroll_measurement(
         return ScrollFollowCommit::Abandon;
     }
 
-    tracker.tracked_rect = placement_rect;
+    tracker.tracked_rect = Some(placement_rect);
     tracker.tracked_rect_measured = true;
     tracker.last_measured_y = measured_rect.y;
+    // 存原始高度，不是 placement_rect 那个已压缩的。
+    tracker.last_measured_height = measured_rect.height;
+
+    // 这一帧还在被裁剪 => 本段位移的测量值不代表真实滚动距离，作废比例学习窗口。
+    //
+    // 测量对象是多行选区的**首行**。它被视口顶边裁剪时 y 会被钉住，测得的位移
+    // 小于内容真实位移，拿去算比例会系统性偏小。实测：同样 -120 delta，未被
+    // 裁剪时测得 -84px（0.700），裁剪中只测得 -56px（0.467，低估 33%）。
+    // 比例偏小会让预测追不上真实滚动，正是 #42 花大力气修掉的那类观感。
+    //
+    // 与 invalidate_scroll_ratio_burst 是同一类处置：那条针对「中间有没测到的
+    // 空档」，这条针对「测到了但测的不是真实位移」。
+    if step_delta_height.abs() >= SCROLL_SETTLE_STABLE_EPSILON_PX {
+        tracker.ratio_burst_valid = false;
+    }
     if measurement_is_stable && will_show {
         // 这一段滚动结算完毕，重置位移起点。只扣掉本次快照已计入的 delta，
         // 测量期间新到的滚轮事件要保留。无论这段是否可信都要重置：
@@ -2070,16 +2135,23 @@ fn measure_tracked_selection_rect(
     let excluded_rects = assistant_window_rects(app);
     let has_visual_state = state.latest_selection_visual().is_some();
 
-    if let Some(visual) = state.latest_selection_visual() {
+    // 视觉扫描需要一个搜索带，而搜索带要以当前认为的位置为中心。没有几何时
+    // 这条路走不了（剪贴板兜底选区本来也没有视觉状态），交给下面的 UIA。
+    if let (Some(visual), Some(tracked_rect)) =
+        (state.latest_selection_visual(), snapshot.tracked_rect)
+    {
         if let Some(window_rect) = source_window_screen_rect(visual.source_window_handle) {
             if let Some(search_rect) =
-                tracked_visual_search_rect(window_rect, snapshot.tracked_rect, visual.rect)
+                tracked_visual_search_rect(window_rect, tracked_rect, visual.rect)
             {
                 if let Some(found) = visual_selection_within(visual, search_rect, &excluded_rects) {
                     // 不在这里写回：扫描期间选区可能已经被替换，
                     // 立刻落盘会用旧选区的视觉状态覆盖掉新选区的。
+                    //
+                    // 返回**未经压缩**的几何：高度要留给稳定性判定用，
+                    // 压缩推迟到构造放置矩形时。
                     return MeasureOutcome::Measured {
-                        rect: scroll_follow_placement_rect(found.rect),
+                        rect: found.rect,
                         visual: Some(found),
                     };
                 }
@@ -2128,12 +2200,13 @@ fn measure_tracked_selection_rect(
             return MeasureOutcome::Failed;
         }
     }
+    // 同样返回未经压缩的几何。UIA 对部分滚出视口的文本范围返回的是裁剪后的
+    // 矩形，那个逐帧缩小的高度正是判定「裁剪是否仍在推进」的依据。
     uia_result
         .rects
         .iter()
         .copied()
         .find(is_valid_rect)
-        .map(scroll_follow_placement_rect)
         .map_or(MeasureOutcome::Failed, |rect| MeasureOutcome::Measured {
             rect,
             visual: None,
@@ -2185,6 +2258,12 @@ fn finish_scroll_tracker(
     }
 
     // 静止后把最终位置同步回选区上下文，供面板等后续逻辑使用。
+    //
+    // 整场会话一次都没测到几何时（tracked_rect 仍为 None）没有可同步的东西，
+    // 直接收尾。这不是异常：剪贴板兜底选区在 UIA 也拿不到几何时就是如此。
+    let Some(tracked_rect) = tracked_rect else {
+        return;
+    };
     let Some(mut context) = state.latest_selection() else {
         return;
     };
