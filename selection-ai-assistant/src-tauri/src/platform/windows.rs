@@ -1180,6 +1180,16 @@ fn capture_store_and_show_floating_button(
         state.clear_latest_selection_visual();
     }
     emit_context_if_panel_visible(app, &context);
+    // 先自增 generation 再显示，顺序不能反。
+    //
+    // floating-button 是共享窗口。反过来的话，旧跟随会话可能在「校验 generation
+    // 通过」之后、我们自增之前完成它的 show，把窗口挪回旧选区的位置；而新选区
+    // 这边已经显示完毕，不会再摆一次，操作条就停在错的地方（issue #44 第 8 条）。
+    // 先自增则旧会话的事务必然校验失败，根本不会执行 show。
+    //
+    // 显示失败时 generation 也已经自增：这没有副作用——选区确实换了，旧会话本来
+    // 就该作废。
+    next_scroll_follow_generation();
     match show_floating_button_for_selection(app.clone(), toolbar_anchor, &toolbar_selection_rects)
     {
         Ok(()) => {
@@ -1192,7 +1202,6 @@ fn capture_store_and_show_floating_button(
                 &context.selection.source_app,
                 &context.selection.window_title,
             );
-            state.next_scroll_follow_generation();
             state.store_latest_floating_button_window_position(window_position);
             Some(VisibleFloatingButton {
                 window_position,
@@ -1230,7 +1239,7 @@ fn clear_selection_and_hide_button(app: &tauri::AppHandle) {
     let state = app.state::<AppState>();
     // 让正在运行的跟随会话立刻作废：generation 现在只代表“选区身份”，
     // 不再每次滚轮都自增。
-    state.next_scroll_follow_generation();
+    next_scroll_follow_generation();
     state.clear_latest_selection();
     let _ = hide_floating_button(app.clone());
 }
@@ -1289,9 +1298,13 @@ struct ScrollTracker {
     source_window_handle: isize,
 }
 
+/// 一次采样从锁里拷出来的会话状态。
+///
+/// 不含 `generation`：会话是否仍代表当前选区，由事务在锁内直接比对
+/// `tracker.generation` 与 `ScrollFollowState::generation` 判定，
+/// 快照带一份出来只会诱使调用方在锁外做二次判断。
 #[derive(Debug, Clone)]
 struct ScrollTrackerSnapshot {
-    generation: u64,
     started_at: Instant,
     last_wheel_at: Instant,
     pace: ScrollPace,
@@ -1309,9 +1322,35 @@ struct ScrollTrackerSnapshot {
     source_window_handle: isize,
 }
 
-fn scroll_tracker() -> &'static Mutex<Option<ScrollTracker>> {
-    static TRACKER: OnceLock<Mutex<Option<ScrollTracker>>> = OnceLock::new();
-    TRACKER.get_or_init(|| Mutex::new(None))
+/// 滚动跟随的全部共享状态。
+///
+/// `generation` 代表「当前是哪一个选区」，原先住在 `AppState` 的独立
+/// Mutex 里。它和会话状态分属两把锁时，一次 tick 只能先读 generation、
+/// 再去加 tracker 的锁提交——两者之间始终有窗口，新选区正好落在里面
+/// 就会让旧会话把它的 `latest_selection_visual` 覆盖掉、甚至把共享操作条
+/// 挪回旧位置。补校验点只能缩窄这个窗口，关不掉它（见 issue #44）。
+///
+/// 放进同一把锁之后，「校验 → 决策 → 改状态」可以在一个临界区内完成。
+struct ScrollFollowState {
+    generation: u64,
+    tracker: Option<ScrollTracker>,
+}
+
+fn scroll_follow_state() -> &'static Mutex<ScrollFollowState> {
+    static STATE: OnceLock<Mutex<ScrollFollowState>> = OnceLock::new();
+    STATE.get_or_init(|| {
+        Mutex::new(ScrollFollowState {
+            generation: 0,
+            tracker: None,
+        })
+    })
+}
+
+/// 换了选区：作废正在跑的跟随会话。
+fn next_scroll_follow_generation() {
+    if let Ok(mut state) = scroll_follow_state().lock() {
+        state.generation = state.generation.saturating_add(1);
+    }
 }
 
 fn next_scroll_session_id() -> u64 {
@@ -1339,14 +1378,17 @@ fn store_scroll_ratio(process_name: &str, estimate: ScrollRatioEstimate) {
 }
 
 fn scroll_tracker_snapshot(session_id: u64) -> Option<ScrollTrackerSnapshot> {
-    let guard = scroll_tracker().lock().ok()?;
-    let tracker = guard.as_ref()?;
+    let guard = scroll_follow_state().lock().ok()?;
+    let tracker = guard.tracker.as_ref()?;
     if tracker.session_id != session_id || !tracker.running {
+        return None;
+    }
+    // 会话开始后选区就换了：这一轮不必再测。
+    if tracker.generation != guard.generation {
         return None;
     }
 
     Some(ScrollTrackerSnapshot {
-        generation: tracker.generation,
         started_at: tracker.started_at,
         last_wheel_at: tracker.last_wheel_at,
         pace: tracker.pace,
@@ -1458,7 +1500,6 @@ fn follow_visible_floating_button_after_scroll(
     }
 
     let state = app.state::<AppState>();
-    let generation = state.scroll_follow_generation();
     let Some(source_window_handle) = state.latest_selection_window_handle() else {
         return;
     };
@@ -1503,11 +1544,12 @@ fn follow_visible_floating_button_after_scroll(
     // 六次测量全失败而放弃时，running 和 tracked_rect_measured 同时为 false，
     // 若把它塞进几何资格的 then_some 里，恰好就是这个标记要保护的场景被过滤掉，
     // 幽灵操作条照样会冒出来。
-    let (reusable_tracked_rect, baseline_measured, recovering_from_abandon) = scroll_tracker()
+    let (reusable_tracked_rect, baseline_measured, recovering_from_abandon) = scroll_follow_state()
         .lock()
         .ok()
         .and_then(|guard| {
-            guard.as_ref().map(|tracker| {
+            let generation = guard.generation;
+            guard.tracker.as_ref().map(|tracker| {
                 if tracker.generation != generation {
                     return (None, false, false);
                 }
@@ -1547,14 +1589,16 @@ fn follow_visible_floating_button_after_scroll(
     let session_id = next_scroll_session_id();
     let mut started_session = None;
     let mut hide_now = false;
-    if let Ok(mut guard) = scroll_tracker().lock() {
+    if let Ok(mut guard) = scroll_follow_state().lock() {
+        let generation = guard.generation;
         let restart = guard
+            .tracker
             .as_ref()
             .map(|tracker| !tracker.running || tracker.generation != generation)
             .unwrap_or(true);
 
         if restart {
-            *guard = Some(ScrollTracker {
+            guard.tracker = Some(ScrollTracker {
                 session_id,
                 running: true,
                 generation,
@@ -1581,7 +1625,7 @@ fn follow_visible_floating_button_after_scroll(
             });
             started_session = Some(session_id);
             hide_now = pace == ScrollPace::Fast;
-        } else if let Some(tracker) = guard.as_mut() {
+        } else if let Some(tracker) = guard.tracker.as_mut() {
             tracker.last_wheel_at = Instant::now();
             tracker.pace = pace;
             tracker.pending_wheel_delta += wheel_delta;
@@ -1637,13 +1681,11 @@ fn spawn_scroll_tracker(app: tauri::AppHandle, session_id: u64) {
             thread::sleep(SCROLL_TRACK_SAMPLE_INTERVAL);
             sample_index = sample_index.saturating_add(1);
 
+            // 会话被取代（换了选区、或换了跟随会话）时快照直接取不到，
+            // generation 的校验已经在取快照的那把锁里做掉了。
             let Some(snapshot) = scroll_tracker_snapshot(session_id) else {
                 return;
             };
-            if app.state::<AppState>().scroll_follow_generation() != snapshot.generation {
-                finish_scroll_tracker(&app, session_id, false);
-                return;
-            }
             if snapshot.started_at.elapsed() > SCROLL_TRACK_MAX_SESSION {
                 // 安全阀触发时并不代表已经吸附成功。持续快滚 20 秒的场景里
                 // tracked_rect 只是预测值、测量还被刻意跳过，按成功收尾会把
@@ -1654,7 +1696,8 @@ fn spawn_scroll_tracker(app: tauri::AppHandle, session_id: u64) {
                     "scroll tracking hit the {}s safety timeout (measured={measured})",
                     SCROLL_TRACK_MAX_SESSION.as_secs()
                 ));
-                finish_scroll_tracker(&app, session_id, !measured);
+                // 安全阀是硬停：不校验 wheel_seq，否则一直滚下去就永远停不了。
+                finish_scroll_tracker(&app, session_id, None, !measured);
                 return;
             }
 
@@ -1671,7 +1714,7 @@ fn spawn_scroll_tracker(app: tauri::AppHandle, session_id: u64) {
                     continue;
                 }
                 ScrollTrackerAction::Finish => {
-                    finish_scroll_tracker(&app, session_id, false);
+                    finish_scroll_tracker(&app, session_id, Some(snapshot.wheel_seq), false);
                     return;
                 }
                 ScrollTrackerAction::Abandon => {
@@ -1679,7 +1722,7 @@ fn spawn_scroll_tracker(app: tauri::AppHandle, session_id: u64) {
                         "floating button hidden after {} failed scroll measurements",
                         snapshot.failures
                     ));
-                    finish_scroll_tracker(&app, session_id, true);
+                    finish_scroll_tracker(&app, session_id, Some(snapshot.wheel_seq), true);
                     return;
                 }
                 ScrollTrackerAction::Measure => {
@@ -1719,83 +1762,79 @@ fn measure_and_follow_selection(
         height: measured_rect.height,
     };
 
-    if let Some(window_rect) = source_window_screen_rect(snapshot.source_window_handle) {
-        if !selection_still_trackable_on_monitors(
-            placement_rect,
-            window_rect,
-            &monitor_screen_rects(app),
-        ) {
-            // 放弃是**持久**动作：隐藏操作条，并让下一轮也先保持隐藏。所以在
-            // 执行前必须确认这次测量没有被后续滚轮取代——尤其是反向滚动会把
-            // 选区重新带回视口，此时拿一份过期的「已滚出视口」结论去放弃，
-            // 会把一个其实可见的选区判死。
-            if !scroll_wheel_seq_unchanged(session_id, snapshot.wheel_seq) {
-                return;
-            }
-            trace_selection_monitor(format_args!(
-                "floating button hidden: selection scrolled out of source window"
-            ));
-            finish_scroll_tracker(app, session_id, true);
-            return;
-        }
-    }
+    let trackable =
+        source_window_screen_rect(snapshot.source_window_handle).is_none_or(|window_rect| {
+            selection_still_trackable_on_monitors(
+                placement_rect,
+                window_rect,
+                &monitor_screen_rects(app),
+            )
+        });
 
     // 相邻两次测量几乎没有位移 => 应用的滚动动画已经播完。
     let step_delta_y = measured_rect.y - snapshot.last_measured_y;
     let measurement_is_stable = settled_measurement_is_stable(settled, step_delta_y);
 
-    // 因快速滚动而隐藏的操作条，必须等动画真的停下来才能重新出现。
-    // 空闲时间一到就把它显示在中途位置上，它会跟着剩余动画一路追，
-    // 正是本次要消灭的观感；此时继续测量即可，不显示。
-    if snapshot.hidden && !measurement_is_stable {
-        commit_scroll_measurement(
-            session_id,
-            snapshot,
-            measured_rect,
-            placement_rect,
-            false,
-            false,
-        );
-        return;
-    }
+    // 因快速滚动而隐藏的操作条，必须等动画真的停下来才能重新出现。空闲时间
+    // 一到就把它显示在中途位置上，它会跟着剩余动画一路追，正是要消灭的观感。
+    //
+    // 这两项都只依赖快照，是纯函数，锁外算好再交给事务，事务里不再重算。
+    let will_show = !snapshot.hidden || measurement_is_stable;
 
-    let Ok(position) = floating_button_position_for_selection(
-        app,
-        Point {
-            x: placement_rect.x,
-            y: placement_rect.y,
-        },
-        &[placement_rect],
-    ) else {
-        record_scroll_measure_failure(session_id, snapshot.wheel_seq);
-        return;
+    // 位置同样在锁外算：它只依赖 placement_rect 与显示器几何，不碰会话状态。
+    // 只在确实要显示时才算——枚举显示器有成本，不显示的帧没必要付。
+    let position = if trackable && will_show {
+        match floating_button_position_for_selection(
+            app,
+            Point {
+                x: placement_rect.x,
+                y: placement_rect.y,
+            },
+            &[placement_rect],
+        ) {
+            Ok(position) => Some(position),
+            Err(_) => {
+                record_scroll_measure_failure(session_id, snapshot.wheel_seq);
+                return;
+            }
+        }
+    } else {
+        None
     };
 
-    // 先在锁内提交（受 generation + wheel_seq 保护），提交成功才产生副作用。
-    //
-    // 顺序很关键：如果先 show 再提交，一个在 show 期间到达的滚轮事件会把
-    // tracker 标成 hidden 并隐藏操作条，而我们随后又把它显示出来；提交虽然
-    // 会因序号不符被拒，但 tracker 里 hidden 已经是 true，后续 WaitHidden
-    // 不会再隐藏它——操作条就在整段快滚里一直停在过期位置上。
-    if app.state::<AppState>().scroll_follow_generation() != snapshot.generation {
-        return;
-    }
-    if !commit_scroll_measurement(
+    // 到这里为止全部在锁外。下面一次加锁，把校验、判定、状态变更和视觉状态
+    // 写回一并做掉；锁外只按返回的结果执行副作用，不再重新读状态。
+    let state = app.state::<AppState>();
+    let commit = apply_scroll_measurement(
+        &state,
         session_id,
         snapshot,
         measured_rect,
         placement_rect,
+        measured_visual,
+        trackable,
         measurement_is_stable,
-        true,
-    ) {
-        return;
-    }
+        will_show,
+    );
 
-    // 提交成功后才把像素扫描到的视觉状态写回全局。
-    if let Some(visual) = measured_visual {
-        app.state::<AppState>()
-            .store_latest_selection_visual(visual);
-    }
+    let position = match commit {
+        ScrollFollowCommit::Stale => return,
+        ScrollFollowCommit::Abandon => {
+            trace_selection_monitor(format_args!(
+                "floating button hidden: selection scrolled out of source window"
+            ));
+            let _ = hide_floating_button(app.clone());
+            return;
+        }
+        // 快滚尚未停稳：测量已记下，但不在未验证的位置上渲染。
+        ScrollFollowCommit::MeasuredOnly => return,
+        ScrollFollowCommit::Show => {
+            let Some(position) = position else {
+                return;
+            };
+            position
+        }
+    };
 
     if show_floating_button_at_position(app.clone(), position).is_err() {
         // 提交已经把 settled_measurement_stable 置真、hidden 清零。若就此返回，
@@ -1807,20 +1846,21 @@ fn measure_and_follow_selection(
         return;
     }
 
-    app.state::<AppState>()
-        .store_latest_floating_button_window_position(position);
+    state.store_latest_floating_button_window_position(position);
 
     // show 期间若又来滚轮事件要求隐藏，把刚显示出来的收回去。
     //
-    // 这里**不能**因为 generation 变了就隐藏：floating-button 是共享窗口，
-    // 新选区被捕获时会重新定位并显示同一个窗口、然后自增 generation。此时
-    // 隐藏等于把新选区那个位置正确的操作条删掉，而监视循环仍记录它可见，
-    // 不会自动再显示。旧会话只管自己那一份，交给新主人处理。
-    let superseded_and_hidden = scroll_tracker()
+    // 这里**不能**因为 generation 变了就隐藏：floating-button 是共享窗口。
+    // 换选区的路径现在先自增 generation 再显示操作条，所以走到这一步、
+    // generation 却已经变了，只可能是新主人已经把窗口摆到了它自己的位置上。
+    // 隐藏等于把那个位置正确的操作条删掉，而监视循环仍记录它可见，不会自动
+    // 再显示。旧会话只管自己那一份。
+    let superseded_and_hidden = scroll_follow_state()
         .lock()
         .ok()
         .and_then(|guard| {
             guard
+                .tracker
                 .as_ref()
                 .map(|tracker| tracker.session_id == session_id && tracker.hidden)
         })
@@ -1853,37 +1893,72 @@ fn measure_and_follow_selection(
     }
 }
 
-/// 把一次测量结果写回 tracker，返回是否真的写入。
+/// 一次测量在锁内做出的落地决定。锁外只按这个结果执行副作用。
+enum ScrollFollowCommit {
+    /// 快照已过期：会话被取代、期间来了新滚轮、或选区已经换了。什么都不做。
+    Stale,
+    /// 选区已不在可见区域内。状态已在锁内标记为放弃，调用方只需隐藏操作条。
+    Abandon,
+    /// 测量已记下，但这一帧不显示（快滚尚未停稳）。
+    MeasuredOnly,
+    /// 提交并显示。
+    Show,
+}
+
+/// 把一次测量的「校验 → 判定 → 改状态」收敛进单个临界区。
 ///
-/// 在锁内校验 `wheel_seq`：测量是在锁外做的，期间新到的滚轮事件会装入更新的
-/// 预测值。只比对 `session_id` 的话，过期测量会把它覆盖掉，还顺手清空
-/// failures/hidden 并置上 settled_measurement_stable，让下一轮在仍有新滚动时
-/// 就收尾。返回 false 表示这次结果已过期，调用方不应再产生任何副作用。
+/// 测量必须在锁外做（UIA 是跨进程 COM 调用，像素扫描要抓屏），结果天然可能
+/// 过期。此前的做法是测完之后分多次加锁逐项校验：先 `scroll_wheel_seq_unchanged`
+/// 再 `finish_scroll_tracker`、先读 generation 再 `commit_scroll_measurement`。
+/// 每一层都只把竞态窗口缩窄到「两次相邻加锁之间」，关不掉它——issue #44 的
+/// 第 1、7、8 条都是这么来的，而且后期几乎每条都是在补上一条修复留下的窗口。
 ///
-/// `will_show` 为 false 表示调用方这次不会显示操作条（快速滚动尚未停稳），
-/// 此时不能把 `hidden` 复位，否则后续的 WaitHidden 不会再隐藏它。
-fn commit_scroll_measurement(
+/// 这里改成单一事务：三项校验（session_id / wheel_seq / generation）、放弃与
+/// 提交的判定、状态变更、以及视觉状态写回，全部在同一次加锁内完成。调用方拿到
+/// 结果后不再重新读状态做二次判断。
+#[allow(clippy::too_many_arguments)]
+fn apply_scroll_measurement(
+    state: &AppState,
     session_id: u64,
     snapshot: &ScrollTrackerSnapshot,
     measured_rect: Rect,
     placement_rect: Rect,
+    measured_visual: Option<SelectionVisualState>,
+    trackable: bool,
     measurement_is_stable: bool,
     will_show: bool,
-) -> bool {
-    let Ok(mut guard) = scroll_tracker().lock() else {
-        return false;
+) -> ScrollFollowCommit {
+    let Ok(mut guard) = scroll_follow_state().lock() else {
+        return ScrollFollowCommit::Stale;
     };
-    let Some(tracker) = guard.as_mut() else {
-        return false;
+    let generation = guard.generation;
+    let Some(tracker) = guard.tracker.as_mut() else {
+        return ScrollFollowCommit::Stale;
     };
-    if tracker.session_id != session_id || tracker.wheel_seq != snapshot.wheel_seq {
-        return false;
+
+    // 三项校验一次做完：
+    // - session_id：这一轮跟随会话是否还是发起测量的那一个；
+    // - wheel_seq：测量期间有没有来新的滚轮事件（结果是否已被更新的预测取代）；
+    // - generation：选区有没有被换掉（旧会话不得再碰新选区的任何状态）。
+    if tracker.session_id != session_id
+        || tracker.wheel_seq != snapshot.wheel_seq
+        || tracker.generation != generation
+    {
+        return ScrollFollowCommit::Stale;
+    }
+
+    if !trackable {
+        // 放弃是**持久**动作：下一轮也要保持隐藏。它与上面的校验同处一个临界区，
+        // 不会再出现「校验通过后、标记停止前来了反向滚轮，却仍把选区判死」。
+        tracker.running = false;
+        tracker.abandoned = true;
+        return ScrollFollowCommit::Abandon;
     }
 
     tracker.tracked_rect = placement_rect;
     tracker.tracked_rect_measured = true;
     tracker.last_measured_y = measured_rect.y;
-    if measurement_is_stable {
+    if measurement_is_stable && will_show {
         // 这一段滚动结算完毕，重置位移起点。只扣掉本次快照已计入的 delta，
         // 测量期间新到的滚轮事件要保留。无论这段是否可信都要重置：
         // 不可信的那段更不能留着累加。
@@ -1892,14 +1967,31 @@ fn commit_scroll_measurement(
         tracker.ratio_burst_valid = true;
     }
     tracker.failures = 0;
-    // 只有「已经静止 + 这一帧几乎没再动」才算吸附完成。空闲时间到了但画面
-    // 还在动时继续测，否则会把动画中途的位置当成最终位置。
-    tracker.settled_measurement_stable = measurement_is_stable;
-    // 只有确实要把操作条显示出来时才清除隐藏标记。
-    if will_show {
-        tracker.hidden = false;
+    // 只有「已经静止 + 这一帧几乎没再动 + 确实显示了」才算吸附完成。
+    tracker.settled_measurement_stable = measurement_is_stable && will_show;
+
+    if !will_show {
+        return ScrollFollowCommit::MeasuredOnly;
     }
-    true
+    tracker.hidden = false;
+
+    // 视觉状态的写回也放进这个临界区。
+    //
+    // 它原先在锁外做，于是「generation 校验通过」与「写回」之间存在窗口：
+    // 替换选区若正好落在里面，旧会话就会用自己那份视觉状态盖掉新选区的
+    // （issue #44 第 8 条）。这里 generation 已在上面校验过且锁未释放，
+    // 写回不可能再落到新选区头上。
+    //
+    // 与原实现一致，只在确实显示这一帧时才写回：不显示的帧沿用上一份视觉
+    // 状态作为下次扫描的搜索种子。这是行为保持，不是竞态相关的取舍。
+    //
+    // 锁序：follow-state → AppState 的单个字段锁。反向嵌套在代码里不存在，
+    // 且这里不做任何系统调用，不会因窗口消息重入而自锁。
+    if let Some(visual) = measured_visual {
+        state.store_latest_selection_visual(visual);
+    }
+
+    ScrollFollowCommit::Show
 }
 
 /// 回滚一次提交：show 实际上失败了。
@@ -1913,8 +2005,8 @@ fn commit_scroll_measurement(
 /// 滚轮处理里 `!tracker.hidden` 为假会跳过 hide，旧操作条就整段快滚都留在
 /// 屏幕上。
 fn rollback_failed_show(session_id: u64, restore_hidden: bool) {
-    if let Ok(mut guard) = scroll_tracker().lock() {
-        if let Some(tracker) = guard.as_mut() {
+    if let Ok(mut guard) = scroll_follow_state().lock() {
+        if let Some(tracker) = guard.tracker.as_mut() {
             if tracker.session_id == session_id {
                 tracker.settled_measurement_stable = false;
                 if restore_hidden {
@@ -1927,26 +2019,13 @@ fn rollback_failed_show(session_id: u64, restore_hidden: bool) {
 
 /// 作废当前的比例学习窗口：这一段位移中间有没测到的空档。
 fn invalidate_scroll_ratio_burst(session_id: u64) {
-    if let Ok(mut guard) = scroll_tracker().lock() {
-        if let Some(tracker) = guard.as_mut() {
+    if let Ok(mut guard) = scroll_follow_state().lock() {
+        if let Some(tracker) = guard.tracker.as_mut() {
             if tracker.session_id == session_id {
                 tracker.ratio_burst_valid = false;
             }
         }
     }
-}
-
-/// 这次测量期间有没有来新的滚轮事件。用于在执行持久性动作前确认结果未过期。
-fn scroll_wheel_seq_unchanged(session_id: u64, wheel_seq: u64) -> bool {
-    scroll_tracker()
-        .lock()
-        .ok()
-        .and_then(|guard| {
-            guard
-                .as_ref()
-                .map(|tracker| tracker.session_id == session_id && tracker.wheel_seq == wheel_seq)
-        })
-        .unwrap_or(false)
 }
 
 /// 记一次测量失败。
@@ -1955,8 +2034,8 @@ fn scroll_wheel_seq_unchanged(session_id: u64, wheel_seq: u64) -> bool {
 /// session_id 的话，连续滚动时几次被取代的 UIA 尝试就能把失败数累到上限，
 /// 放弃一个在当前位置上从未失败过的选区。
 fn record_scroll_measure_failure(session_id: u64, wheel_seq: u64) {
-    if let Ok(mut guard) = scroll_tracker().lock() {
-        if let Some(tracker) = guard.as_mut() {
+    if let Ok(mut guard) = scroll_follow_state().lock() {
+        if let Some(tracker) = guard.tracker.as_mut() {
             if tracker.session_id == session_id && tracker.wheel_seq == wheel_seq {
                 tracker.failures = tracker.failures.saturating_add(1);
             }
@@ -2063,25 +2142,42 @@ fn measure_tracked_selection_rect(
 
 /// 结束跟随会话。`abandon` 表示无法确认选区位置，此时隐藏操作条而不是
 /// 把它留在一个猜测出来的位置上。
-fn finish_scroll_tracker(app: &tauri::AppHandle, session_id: u64, abandon: bool) {
-    let mut tracked_rect = None;
-    let mut generation = None;
-    if let Ok(mut guard) = scroll_tracker().lock() {
-        if let Some(tracker) = guard.as_mut() {
-            if tracker.session_id != session_id {
-                return;
-            }
-            tracker.running = false;
-            tracker.abandoned = abandon;
-            tracked_rect = Some(tracker.tracked_rect);
-            generation = Some(tracker.generation);
+///
+/// `expected_wheel_seq` 是发起收尾的那次采样看到的滚轮序号，`None` 表示
+/// 不校验（只有安全阀这种硬停才该这么做）。停止会话是**持久**动作：读出快照
+/// 到这里之间若来了新滚轮，这次收尾结论就已经过期。以前只比对 `session_id`，
+/// 于是稳定收尾那一格滚动只有预测没有测量（issue #44 第 1 条）；放弃路径更糟，
+/// 反向滚动把选区带回视口时会被 latch 成 `abandoned`（第 7 条）。
+///
+/// generation 与会话同处一把锁，一并在这里校验：选区已经换掉的旧会话不得再
+/// 把自己那份几何平移进新选区的上下文。
+fn finish_scroll_tracker(
+    app: &tauri::AppHandle,
+    session_id: u64,
+    expected_wheel_seq: Option<u64>,
+    abandon: bool,
+) {
+    let tracked_rect;
+    {
+        let Ok(mut guard) = scroll_follow_state().lock() else {
+            return;
+        };
+        let generation = guard.generation;
+        let Some(tracker) = guard.tracker.as_mut() else {
+            return;
+        };
+        if tracker.session_id != session_id || tracker.generation != generation {
+            return;
         }
+        if expected_wheel_seq.is_some_and(|expected| tracker.wheel_seq != expected) {
+            return;
+        }
+        tracker.running = false;
+        tracker.abandoned = abandon;
+        tracked_rect = tracker.tracked_rect;
     }
 
     let state = app.state::<AppState>();
-    if generation.is_some_and(|generation| generation != state.scroll_follow_generation()) {
-        return;
-    }
 
     if abandon {
         let _ = hide_floating_button(app.clone());
@@ -2089,9 +2185,6 @@ fn finish_scroll_tracker(app: &tauri::AppHandle, session_id: u64, abandon: bool)
     }
 
     // 静止后把最终位置同步回选区上下文，供面板等后续逻辑使用。
-    let Some(tracked_rect) = tracked_rect else {
-        return;
-    };
     let Some(mut context) = state.latest_selection() else {
         return;
     };
