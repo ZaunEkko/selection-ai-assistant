@@ -20,7 +20,6 @@ pub struct AppState {
     latest_selection_window_handle: Mutex<Option<isize>>,
     latest_selection_visual: Mutex<Option<SelectionVisualState>>,
     latest_floating_button_window_position: Mutex<Option<Point>>,
-    scroll_follow_generation: Mutex<u64>,
     latest_source_text: Mutex<Option<String>>,
 }
 
@@ -33,7 +32,7 @@ impl AppState {
             latest_selection_window_handle: Mutex::new(None),
             latest_selection_visual: Mutex::new(None),
             latest_floating_button_window_position: Mutex::new(None),
-            scroll_follow_generation: Mutex::new(0),
+
             latest_source_text: Mutex::new(None),
         }
     }
@@ -46,7 +45,7 @@ impl AppState {
             latest_selection_window_handle: Mutex::new(None),
             latest_selection_visual: Mutex::new(None),
             latest_floating_button_window_position: Mutex::new(None),
-            scroll_follow_generation: Mutex::new(0),
+
             latest_source_text: Mutex::new(None),
         }
     }
@@ -137,22 +136,6 @@ impl AppState {
             .latest_floating_button_window_position
             .lock()
             .expect("latest floating button window position mutex poisoned") = None;
-    }
-
-    pub fn next_scroll_follow_generation(&self) -> u64 {
-        let mut generation = self
-            .scroll_follow_generation
-            .lock()
-            .expect("scroll follow generation mutex poisoned");
-        *generation = generation.saturating_add(1);
-        *generation
-    }
-
-    pub fn scroll_follow_generation(&self) -> u64 {
-        *self
-            .scroll_follow_generation
-            .lock()
-            .expect("scroll follow generation mutex poisoned")
     }
 
     pub fn clear_latest_selection(&self) {

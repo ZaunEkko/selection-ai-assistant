@@ -4,7 +4,8 @@ use selection_ai_assistant_lib::input_monitor::events::{
     handle_hotkey_state, handle_mouse_button_event, hover_action_for_pending_selection,
     hover_action_for_pending_selection_when_idle, is_drag_distance_met, manual_hotkey_trigger_key,
     predicted_scroll_offset, scroll_tracker_action, selection_geometry_matches_drag_gesture,
-    selection_rects_match_drag_gesture, selection_still_trackable, settled_measurement_is_stable,
+    selection_rects_match_drag_gesture, selection_still_trackable,
+    selection_still_trackable_on_monitors, settled_measurement_is_stable,
     should_follow_scroll_for_source, update_scroll_ratio, visible_floating_button_action_when_idle,
     HotkeyAction, HotkeyKeyState, MouseButtonEvent, MouseUpAction, PendingHotkeyAction,
     PendingSelection, PendingSelectionHoverAction, ScrollBurst, ScrollPace, ScrollTrackerAction,
@@ -1021,5 +1022,136 @@ fn selection_scrolled_out_of_viewport_is_not_trackable() {
             height: 20.0,
         },
         viewport
+    ));
+}
+
+// --- 滚动跟随：窗口伸出桌面之外的部分不算可见 ---
+
+const PRIMARY_MONITOR: Rect = Rect {
+    x: 0.0,
+    y: 0.0,
+    width: 1920.0,
+    height: 1080.0,
+};
+
+#[test]
+fn selection_outside_the_desktop_is_not_trackable() {
+    // 窗口被拖出右边缘，一半在桌面外。
+    let window = Rect {
+        x: 1600.0,
+        y: 100.0,
+        width: 800.0,
+        height: 600.0,
+    };
+    let selection_off_desktop = Rect {
+        x: 2000.0,
+        y: 300.0,
+        width: 300.0,
+        height: 20.0,
+    };
+
+    // 只看窗口边界会误判成可跟踪：选区确实落在窗口矩形之内。
+    assert!(selection_still_trackable(selection_off_desktop, window));
+    assert!(!selection_still_trackable_on_monitors(
+        selection_off_desktop,
+        window,
+        &[PRIMARY_MONITOR]
+    ));
+}
+
+#[test]
+fn selection_on_the_visible_part_of_the_window_stays_trackable() {
+    let window = Rect {
+        x: 1600.0,
+        y: 100.0,
+        width: 800.0,
+        height: 600.0,
+    };
+    assert!(selection_still_trackable_on_monitors(
+        Rect {
+            x: 1650.0,
+            y: 300.0,
+            width: 200.0,
+            height: 20.0,
+        },
+        window,
+        &[PRIMARY_MONITOR]
+    ));
+}
+
+#[test]
+fn selection_on_a_secondary_monitor_stays_trackable() {
+    let secondary = Rect {
+        x: 1920.0,
+        y: 0.0,
+        width: 1920.0,
+        height: 1080.0,
+    };
+    // 跨双屏的窗口：选区在副屏上，与主屏没有交集。
+    let window = Rect {
+        x: 1600.0,
+        y: 100.0,
+        width: 1200.0,
+        height: 600.0,
+    };
+    assert!(selection_still_trackable_on_monitors(
+        Rect {
+            x: 2000.0,
+            y: 300.0,
+            width: 300.0,
+            height: 20.0,
+        },
+        window,
+        &[PRIMARY_MONITOR, secondary]
+    ));
+}
+
+#[test]
+fn selection_in_the_gap_between_monitors_is_not_trackable() {
+    // 两块屏纵向错开，中间留出一段没有任何显示器覆盖的区域。
+    let secondary = Rect {
+        x: 1920.0,
+        y: 600.0,
+        width: 1920.0,
+        height: 1080.0,
+    };
+    let window = Rect {
+        x: 1600.0,
+        y: 0.0,
+        width: 1200.0,
+        height: 600.0,
+    };
+    // y=300 这一行在主屏右侧之外、又在副屏上边缘之上，属于虚拟屏幕外接矩形
+    // 里的空隙——用外接矩形判断会漏掉这种情况。
+    assert!(!selection_still_trackable_on_monitors(
+        Rect {
+            x: 2000.0,
+            y: 300.0,
+            width: 300.0,
+            height: 20.0,
+        },
+        window,
+        &[PRIMARY_MONITOR, secondary]
+    ));
+}
+
+#[test]
+fn missing_monitor_information_falls_back_to_the_window_bounds() {
+    let window = Rect {
+        x: 1600.0,
+        y: 100.0,
+        width: 800.0,
+        height: 600.0,
+    };
+    let selection = Rect {
+        x: 2000.0,
+        y: 300.0,
+        width: 300.0,
+        height: 20.0,
+    };
+    assert!(selection_still_trackable_on_monitors(
+        selection,
+        window,
+        &[]
     ));
 }

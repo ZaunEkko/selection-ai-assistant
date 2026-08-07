@@ -71,6 +71,24 @@ fn rects_intersect(a: Rect, b: Rect) -> bool {
     a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + b.height && a.y + a.height > b.y
 }
 
+/// 两个矩形的重叠部分；不重叠时返回 `None`。
+fn rect_intersection(a: Rect, b: Rect) -> Option<Rect> {
+    let left = a.x.max(b.x);
+    let top = a.y.max(b.y);
+    let right = (a.x + a.width).min(b.x + b.width);
+    let bottom = (a.y + a.height).min(b.y + b.height);
+    if right <= left || bottom <= top {
+        return None;
+    }
+
+    Some(Rect {
+        x: left,
+        y: top,
+        width: right - left,
+        height: bottom - top,
+    })
+}
+
 fn is_valid_selection_rect(rect: &Rect) -> bool {
     rect.width > 0.0 && rect.height > 0.0
 }
@@ -413,6 +431,31 @@ pub fn selection_still_trackable(selection_rect: Rect, viewport: Rect) -> bool {
     let visible_right = (selection_rect.x + selection_rect.width).min(viewport.x + viewport.width);
 
     visible_height >= (selection_rect.height * 0.5).min(6.0) && visible_right - visible_left >= 8.0
+}
+
+/// 同上，但把来源窗口先裁到真正可见的桌面区域再判断。
+///
+/// `GetWindowRect` 给的是完整窗口边界，窗口被拖出显示器边缘时，边界会延伸
+/// 到桌面之外。只用窗口边界判断的话，一个已经落在桌面外的选区照样算「可
+/// 跟踪」，而放置逻辑随后又会把操作条钳回显示器可见边缘——结果是选区看不
+/// 见、操作条却停在屏幕边上，稳定后还会提交并收尾，留下一个幽灵操作条。
+///
+/// 逐块显示器求交而不是用虚拟屏幕的外接矩形：后者会把多屏之间的空隙也算
+/// 成可见区域。窗口跨屏时任一块上的可见部分够用即可。
+pub fn selection_still_trackable_on_monitors(
+    selection_rect: Rect,
+    window_rect: Rect,
+    monitors: &[Rect],
+) -> bool {
+    // 拿不到显示器信息时退回只看窗口边界：宁可多跟一帧，也好过误隐藏。
+    if monitors.is_empty() {
+        return selection_still_trackable(selection_rect, window_rect);
+    }
+
+    monitors.iter().any(|monitor| {
+        rect_intersection(window_rect, *monitor)
+            .is_some_and(|viewport| selection_still_trackable(selection_rect, viewport))
+    })
 }
 
 fn is_browser_process(source_app: &str) -> bool {
