@@ -3,15 +3,15 @@ use selection_ai_assistant_lib::input_monitor::events::{
     apply_mouse_up_action_to_pending_selection, classify_mouse_up, consume_pending_selection,
     handle_hotkey_state, handle_mouse_button_event, hover_action_for_pending_selection,
     hover_action_for_pending_selection_when_idle, is_drag_distance_met, manual_hotkey_trigger_key,
-    predicted_scroll_offset, scroll_tracker_action, selection_geometry_matches_drag_gesture,
-    selection_rects_match_drag_gesture, selection_still_trackable,
-    selection_still_trackable_on_monitors, settled_measurement_is_stable,
-    should_follow_scroll_for_source, update_scroll_ratio, visible_floating_button_action_when_idle,
-    HotkeyAction, HotkeyKeyState, MouseButtonEvent, MouseUpAction, PendingHotkeyAction,
-    PendingSelection, PendingSelectionHoverAction, ScrollBurst, ScrollPace, ScrollTrackerAction,
-    SelectionMouseUpEffect, VisibleFloatingButton, VisibleFloatingButtonAction,
-    DEFAULT_PIXELS_PER_WHEEL_DELTA, MAX_SCROLL_MEASURE_FAILURES, SCROLL_SETTLE_IDLE_MS,
-    SCROLL_SETTLE_STABLE_EPSILON_PX,
+    predicted_scroll_offset, scroll_follow_starts_hidden, scroll_tracker_action,
+    selection_geometry_matches_drag_gesture, selection_rects_match_drag_gesture,
+    selection_still_trackable, selection_still_trackable_on_monitors,
+    settled_measurement_is_stable, should_follow_scroll_for_source, update_scroll_ratio,
+    visible_floating_button_action_when_idle, HotkeyAction, HotkeyKeyState, MouseButtonEvent,
+    MouseUpAction, PendingHotkeyAction, PendingSelection, PendingSelectionHoverAction, ScrollBurst,
+    ScrollPace, ScrollTrackerAction, SelectionMouseUpEffect, VisibleFloatingButton,
+    VisibleFloatingButtonAction, DEFAULT_PIXELS_PER_WHEEL_DELTA, MAX_SCROLL_MEASURE_FAILURES,
+    SCROLL_SETTLE_IDLE_MS, SCROLL_SETTLE_STABLE_EPSILON_PX,
 };
 use selection_ai_assistant_lib::types::{Point, Rect};
 
@@ -984,6 +984,25 @@ fn settle_requires_clipping_to_stop_not_just_vertical_motion() {
 
     // 两个维度是与的关系：任一还在变就不算稳。
     assert!(!settled_measurement_is_stable(true, 37.0, -18.0));
+}
+
+/// 剪贴板兜底选区（`selection_rects` 为空、也没有视觉状态）此前根本启动不了
+/// 跟随，滚动时操作条固定不动。现在会话照常启动，但必须先隐藏着等 UIA 供出
+/// 第一帧真实几何——连预测所需的起始 y 都不存在，摆出去的只能是凭空造的。
+#[test]
+fn session_without_seed_geometry_starts_hidden() {
+    // 有种子几何 + 慢滚 + 不是从放弃中恢复 => 正常显示。
+    assert!(!scroll_follow_starts_hidden(ScrollPace::Slow, false, true));
+
+    // 没有种子几何 => 隐藏，哪怕其它条件都正常。
+    assert!(scroll_follow_starts_hidden(ScrollPace::Slow, false, false));
+
+    // 三个条件是或的关系，各自都能单独触发隐藏。
+    assert!(scroll_follow_starts_hidden(ScrollPace::Fast, false, true));
+    assert!(scroll_follow_starts_hidden(ScrollPace::Slow, true, true));
+
+    // 叠加时同样隐藏。
+    assert!(scroll_follow_starts_hidden(ScrollPace::Fast, true, false));
 }
 
 #[test]

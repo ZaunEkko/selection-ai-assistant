@@ -412,6 +412,25 @@ pub fn settled_measurement_is_stable(
         && measured_delta_height.abs() < SCROLL_SETTLE_STABLE_EPSILON_PX
 }
 
+/// 新的跟随会话是否应当以**隐藏**状态启动。
+///
+/// 三种情况都不能在启动时就把操作条摆出来，共同的原则是「不在未经验证的
+/// 位置上渲染」：
+///
+/// - `pace == Fast`：快滚期间刻意不测量，摆出去的只能是预测值；
+/// - `recovering_from_abandon`：上一轮已经确认选区找不到了，凭预测摆回去
+///   就是在无关内容上凭空生出一个幽灵操作条；
+/// - `!has_seed_geometry`：剪贴板兜底选区没有 `selection_rects`、也没有视觉
+///   状态，连预测所需的起始 y 都不存在。此时会话仍然启动（这样才有机会由
+///   tracker 线程从 UIA 取到第一帧真实几何），但必须先隐藏着等。
+pub fn scroll_follow_starts_hidden(
+    pace: ScrollPace,
+    recovering_from_abandon: bool,
+    has_seed_geometry: bool,
+) -> bool {
+    pace == ScrollPace::Fast || recovering_from_abandon || !has_seed_geometry
+}
+
 /// 决定跟随线程这一帧该做什么。
 ///
 /// `settled_measurement_stable` 表示「已经在静止之后测到过一次、且那次测量
